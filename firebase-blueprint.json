@@ -1,0 +1,120 @@
+{
+  "entities": {
+    "Admin": {
+      "title": "Admin",
+      "description": "Administrator account for managing the platform",
+      "type": "object",
+      "properties": {
+        "username": { "type": "string" },
+        "password": { "type": "string" },
+        "pin": { "type": "string" },
+        "role": { "type": "string", "enum": ["owner", "admin"] }
+      },
+      "required": ["username", "password", "pin", "role"]
+    },
+    "User": {
+      "title": "User",
+      "description": "Passenger account",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "password": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "phone", "password"]
+    },
+    "Driver": {
+      "title": "Driver",
+      "description": "Driver account",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "password": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "inactive"] },
+        "wallet_balance": { "type": "number" },
+        "is_online": { "type": "boolean" }
+      },
+      "required": ["name", "phone", "password", "status"]
+    },
+    "Vehicle": {
+      "title": "Vehicle",
+      "description": "Vehicle details linked to a driver",
+      "type": "object",
+      "properties": {
+        "driver_id": { "type": "string" },
+        "model": { "type": "string" },
+        "plate_number": { "type": "string" },
+        "type": { "type": "string", "enum": ["Mini", "Sedan", "SUV"] }
+      },
+      "required": ["driver_id", "model", "plate_number", "type"]
+    },
+    "Ride": {
+      "title": "Ride",
+      "description": "A trip request or completed journey",
+      "type": "object",
+      "properties": {
+        "tracking_id": { "type": "string" },
+        "pickup_location": { "type": "string" },
+        "dropoff_location": { "type": "string" },
+        "pickup_lat": { "type": "number" },
+        "pickup_lng": { "type": "number" },
+        "dropoff_lat": { "type": "number" },
+        "dropoff_lng": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending", "accepted", "ongoing", "completed", "cancelled"] },
+        "fare": { "type": "number" },
+        "vehicle_type": { "type": "string" },
+        "driver_id": { "type": "string" },
+        "user_id": { "type": "string" },
+        "user_name": { "type": "string" },
+        "user_phone": { "type": "string" },
+        "trip_type": { "type": "string", "enum": ["single", "round"] },
+        "distance": { "type": "number" },
+        "pickup_date": { "type": "string" },
+        "pickup_time": { "type": "string" },
+        "start_otp": { "type": "string" },
+        "end_otp": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "started_at": { "type": "string", "format": "date-time" },
+        "eta": { "type": "number" }
+      },
+      "required": ["tracking_id", "pickup_location", "dropoff_location", "status", "fare"]
+    },
+    "Transaction": {
+      "title": "Transaction",
+      "description": "Wallet transaction for a driver",
+      "type": "object",
+      "properties": {
+        "driver_id": { "type": "string" },
+        "amount": { "type": "number" },
+        "type": { "type": "string", "enum": ["credit", "debit"] },
+        "description": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["driver_id", "amount", "type"]
+    },
+    "WithdrawalRequest": {
+      "title": "WithdrawalRequest",
+      "description": "Request from a driver to withdraw funds",
+      "type": "object",
+      "properties": {
+        "driver_id": { "type": "string" },
+        "amount": { "type": "number" },
+        "bank_details": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["driver_id", "amount", "status"]
+    }
+  },
+  "firestore": {
+    "admins": { "schema": "Admin", "description": "Platform administrators" },
+    "users": { "schema": "User", "description": "Passenger profiles" },
+    "drivers": { "schema": "Driver", "description": "Driver profiles" },
+    "vehicles": { "schema": "Vehicle", "description": "Vehicle details" },
+    "rides": { "schema": "Ride", "description": "Ride bookings" },
+    "transactions": { "schema": "Transaction", "description": "Wallet transactions" },
+    "withdrawal_requests": { "schema": "WithdrawalRequest", "description": "Withdrawal requests" }
+  }
+}

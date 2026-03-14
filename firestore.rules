@@ -1,0 +1,137 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: admins
+    // Fields: username, password, pin, role
+    //
+    // Collection: users
+    // Fields: name, phone, password, created_at
+    //
+    // Collection: drivers
+    // Fields: name, phone, password, status, wallet_balance, is_online
+    //
+    // Collection: vehicles
+    // Fields: driver_id, model, plate_number, type
+    //
+    // Collection: rides
+    // Fields: tracking_id, pickup_location, dropoff_location, status, fare, driver_id, user_id, ...
+    //
+    // Collection: transactions
+    // Fields: driver_id, amount, type, description, created_at
+    //
+    // Collection: withdrawal_requests
+    // Fields: driver_id, amount, bank_details, status, created_at
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role in ['admin', 'owner'] ||
+          (request.auth.token.email == "digitalserviceindia84@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function validStringLength(field, minLen, maxLen) {
+      return request.resource.data[field] is string &&
+        request.resource.data[field].size() >= minLen &&
+        request.resource.data[field].size() <= maxLen;
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidUser(data) {
+      return data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             data.phone is string && data.phone.size() >= 10 && data.phone.size() <= 15;
+    }
+
+    function isValidDriver(data) {
+      return data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             data.phone is string && data.phone.size() >= 10 && data.phone.size() <= 15 &&
+             data.status in ['active', 'inactive'];
+    }
+
+    function isValidRide(data) {
+      return data.tracking_id is string &&
+             data.pickup_location is string &&
+             data.dropoff_location is string &&
+             data.status in ['pending', 'accepted', 'ongoing', 'completed', 'cancelled'] &&
+             data.fare is number &&
+             (!('pickup_date' in data) || data.pickup_date is string) &&
+             (!('pickup_time' in data) || data.pickup_time is string);
+    }
+
+    function isValidAdmin(data) {
+      return data.username is string && data.username.size() > 0 &&
+             data.password is string && data.password.size() > 0 &&
+             data.pin is string && data.pin.matches("^\\d{4}$") &&
+             data.role in ['admin', 'owner'];
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /admins/{adminId} {
+      allow read, write: if isAdmin() && (request.method == 'GET' || isValidAdmin(request.resource.data));
+    }
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isAuthenticated() && isValidUser(request.resource.data);
+      allow update: if (isOwner(userId) || isAdmin()) && isValidUser(request.resource.data);
+    }
+
+    match /drivers/{driverId} {
+      allow read: if isAuthenticated(); // Drivers need to see each other for some reason? Or just admin?
+      allow create: if isAuthenticated() && isValidDriver(request.resource.data);
+      allow update: if (isOwner(driverId) || isAdmin()) && isValidDriver(request.resource.data);
+    }
+
+    match /vehicles/{vehicleId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin() || (isAuthenticated() && request.resource.data.driver_id == request.auth.uid);
+    }
+
+    match /rides/{rideId} {
+      allow read: if isAuthenticated(); // Users can track, drivers can see available
+      allow create: if isAuthenticated() && isValidRide(request.resource.data);
+      allow update: if isAuthenticated() && isValidRide(request.resource.data);
+    }
+
+    match /transactions/{transactionId} {
+      allow read: if isAdmin() || (isAuthenticated() && resource.data.driver_id == request.auth.uid);
+      allow write: if isAdmin();
+    }
+
+    match /withdrawal_requests/{requestId} {
+      allow read: if isAdmin() || (isAuthenticated() && resource.data.driver_id == request.auth.uid);
+      allow create: if isAuthenticated() && request.resource.data.driver_id == request.auth.uid;
+      allow update: if isAdmin();
+    }
+
+    // Default deny
+    match /{path=**} {
+      allow read, write: if false;
+    }
+  }
+}
