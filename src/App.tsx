@@ -728,14 +728,28 @@ export default function App() {
     setError('');
     
     try {
-      const q = query(collection(db, 'admins'), where('username', '==', loginData.username), where('password', '==', loginData.password));
-      const snapshot = await getDocs(q);
-      if (!snapshot.empty) {
-        const adminData = { ...snapshot.docs[0].data(), id: snapshot.docs[0].id, role: 'admin' };
-        setUser(adminData);
-        setError('');
+      if (adminLoginStep === 'credentials') {
+        const q = query(collection(db, 'admins'), where('username', '==', loginData.username), where('password', '==', loginData.password));
+        const snapshot = await getDocs(q);
+        if (!snapshot.empty) {
+          setTempAdminId(snapshot.docs[0].id);
+          setAdminLoginStep('pin');
+        } else {
+          setError('Invalid admin credentials');
+        }
       } else {
-        setError('Invalid admin credentials');
+        if (!tempAdminId) return;
+        const adminDoc = await getDoc(doc(db, 'admins', tempAdminId));
+        if (adminDoc.exists() && adminDoc.data().pin === adminPin) {
+          const adminData = { ...adminDoc.data(), id: adminDoc.id };
+          setUser(adminData);
+          setAdminLoginStep('credentials');
+          setTempAdminId(null);
+          setAdminPin('');
+          setError('');
+        } else {
+          setError('Invalid PIN');
+        }
       }
     } catch (err: any) {
       setError(err.message || 'Login failed');
@@ -1816,6 +1830,7 @@ export default function App() {
                           type="text"
                           maxLength={4}
                           placeholder="4-Digit PIN"
+                          required
                           className="w-24 px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm"
                           value={newAdmin.pin}
                           onChange={e => setNewAdmin({ ...newAdmin, pin: e.target.value.replace(/\D/g, '').slice(0, 4) })}
@@ -1826,7 +1841,6 @@ export default function App() {
                           onChange={e => setNewAdmin({ ...newAdmin, role: e.target.value as 'admin' | 'owner' })}
                         >
                           <option value="admin">Admin</option>
-                          <option value="owner">Owner</option>
                         </select>
                         <button className="bg-zinc-900 text-white px-4 py-2 rounded-lg text-sm font-bold">Add Admin</button>
                       </form>
@@ -2013,7 +2027,7 @@ export default function App() {
                             <th className="px-6 py-4">ID</th>
                             <th className="px-6 py-4">User</th>
                             <th className="px-6 py-4">Driver</th>
-                            <th className="px-6 py-4">Route</th>
+                            <th className="px-6 py-4">Route & Schedule</th>
                             <th className="px-6 py-4">KM</th>
                             <th className="px-6 py-4">Status</th>
                             <th className="px-6 py-4">Fare</th>
@@ -2026,16 +2040,21 @@ export default function App() {
                               <td className="px-6 py-4 font-medium">{(ride as any).user_name || 'Guest'}</td>
                               <td className="px-6 py-4 font-medium">{(ride as any).driver_name || '---'}</td>
                               <td className="px-6 py-4">
-                                <p className="truncate max-w-[150px]">{ride.pickup_location} → {ride.dropoff_location}</p>
-                                <div className="flex gap-1 mt-1">
+                                <p className="truncate max-w-[150px] font-bold">{ride.pickup_location} → {ride.dropoff_location}</p>
+                                <div className="flex flex-wrap gap-1 mt-1">
                                   {ride.trip_type === 'round' ? (
                                     <span className="text-[8px] bg-indigo-50 text-indigo-600 px-1 py-0.5 rounded font-bold uppercase">Round</span>
                                   ) : (
                                     <span className="text-[8px] bg-zinc-50 text-zinc-600 px-1 py-0.5 rounded font-bold uppercase">Single</span>
                                   )}
                                   {ride.pickup_date && (
-                                    <span className="text-[8px] bg-emerald-50 text-emerald-600 px-1 py-0.5 rounded font-bold uppercase">{ride.pickup_date} {ride.pickup_time}</span>
+                                    <span className="text-[8px] bg-emerald-50 text-emerald-600 px-1 py-0.5 rounded font-bold uppercase flex items-center gap-0.5">
+                                      <Clock className="w-2 h-2" /> {ride.pickup_date} {ride.pickup_time}
+                                    </span>
                                   )}
+                                  <span className="text-[8px] bg-zinc-100 text-zinc-500 px-1 py-0.5 rounded font-bold uppercase">
+                                    Req: {new Date(ride.created_at).toLocaleDateString()}
+                                  </span>
                                 </div>
                               </td>
                               <td className="px-6 py-4 font-medium">{(ride as any).distance || '---'}</td>
@@ -2239,7 +2258,12 @@ export default function App() {
                           <div key={ride.id} className="p-4 bg-zinc-50 rounded-xl border border-zinc-100 flex justify-between items-center">
                             <div>
                               <p className="text-sm font-bold">{ride.pickup_location} → {ride.dropoff_location}</p>
-                              <p className="text-[10px] text-zinc-400 font-mono">{ride.tracking_id}</p>
+                              <div className="flex items-center gap-2 mt-1">
+                                <p className="text-[10px] text-zinc-400 font-mono">{ride.tracking_id}</p>
+                                {ride.pickup_date && (
+                                  <p className="text-[10px] text-emerald-600 font-bold uppercase">{ride.pickup_date} {ride.pickup_time}</p>
+                                )}
+                              </div>
                             </div>
                             <div className="text-right">
                               <p className="font-bold text-emerald-600">₹{ride.fare}</p>
