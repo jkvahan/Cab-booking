@@ -49,7 +49,9 @@ import {
   onAuthStateChanged, 
   signOut,
   createUserWithEmailAndPassword,
-  signInWithEmailAndPassword
+  signInWithEmailAndPassword,
+  setPersistence,
+  browserSessionPersistence
 } from 'firebase/auth';
 import { db, auth } from './firebase';
 import { estimateFare } from './services/geminiService';
@@ -228,13 +230,15 @@ export default function App() {
       default: return 'bg-zinc-100 text-zinc-700';
     }
   };
-  const [user, setUser] = useState<any>(() => {
-    const saved = localStorage.getItem('cabgo_user');
-    return saved ? JSON.parse(saved) : null;
-  });
+  const [user, setUser] = useState<any>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
 
   useEffect(() => {
+    // Set persistence to session only (auto logout on tab/browser close)
+    setPersistence(auth, browserSessionPersistence).catch(err => {
+      console.error("Persistence error:", err);
+    });
+
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
         // If logged in via Firebase Auth, fetch profile from Firestore
@@ -278,18 +282,14 @@ export default function App() {
     };
     testConnection();
   }, []);
-  const [view, setView] = useState<View>(() => {
-    const saved = localStorage.getItem('cabgo_view');
-    return (saved as View) || 'user';
-  });
+  const [view, setView] = useState<View>('user');
 
   useEffect(() => {
-    if (user) localStorage.setItem('cabgo_user', JSON.stringify(user));
-    else localStorage.removeItem('cabgo_user');
+    // No longer using localStorage for user/view to ensure fresh state on open
   }, [user]);
 
   useEffect(() => {
-    localStorage.setItem('cabgo_view', view);
+    // No longer using localStorage for user/view to ensure fresh state on open
   }, [view]);
 
   const [trackingId, setTrackingId] = useState('');
@@ -1370,9 +1370,9 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      <Navbar activeView={view} setView={changeView} onLogout={user ? handleLogout : undefined} />
+      {user && <Navbar activeView={view} setView={changeView} onLogout={user ? handleLogout : undefined} />}
 
-      <main className="pt-20 pb-12 px-3 sm:px-4 max-w-4xl mx-auto">
+      <main className={`${user ? 'pt-20' : 'pt-8'} pb-12 px-3 sm:px-4 max-w-4xl mx-auto`}>
         <AnimatePresence mode="wait">
           {/* USER VIEW */}
           {view === 'user' && (
@@ -1476,16 +1476,30 @@ export default function App() {
                           {userAuthMode === 'login' ? 'Login' : 'Register'}
                         </button>
                       </form>
-                      <div className="mt-6 text-center">
+                      <div className="mt-6 text-center space-y-2">
                         <button 
                           onClick={() => {
                             setUserAuthMode(userAuthMode === 'login' ? 'register' : 'login');
                             setError('');
                           }}
-                          className="text-sm font-medium text-zinc-500 hover:text-zinc-900"
+                          className="block w-full text-sm font-medium text-zinc-500 hover:text-zinc-900"
                         >
                           {userAuthMode === 'login' ? "Don't have an account? Register" : "Already have an account? Login"}
                         </button>
+                        <div className="pt-4 flex items-center justify-center gap-4 border-t border-zinc-100">
+                          <button 
+                            onClick={() => setView('driver')}
+                            className="text-xs font-bold text-zinc-400 hover:text-zinc-900 uppercase tracking-wider"
+                          >
+                            Driver Login
+                          </button>
+                          <button 
+                            onClick={() => setView('admin')}
+                            className="text-xs font-bold text-zinc-400 hover:text-zinc-900 uppercase tracking-wider"
+                          >
+                            Admin Login
+                          </button>
+                        </div>
                       </div>
                     </>
                   )}
@@ -1980,6 +1994,16 @@ export default function App() {
                               className="text-xs font-medium text-zinc-500 hover:text-zinc-900"
                             >
                               Forgot Password?
+                            </button>
+                          </div>
+                          
+                          <div className="pt-4 border-t border-zinc-100 text-center">
+                            <button 
+                              type="button"
+                              onClick={() => setView('user')}
+                              className="text-xs font-bold text-zinc-400 hover:text-zinc-900 uppercase tracking-wider"
+                            >
+                              Back to User Login
                             </button>
                           </div>
                         </form>
@@ -2498,16 +2522,24 @@ export default function App() {
                           {driverAuthMode === 'login' ? 'Login' : 'Register'}
                         </button>
                       </form>
-                      <div className="mt-6 text-center">
+                      <div className="mt-6 text-center space-y-2">
                         <button 
                           onClick={() => {
                             setDriverAuthMode(driverAuthMode === 'login' ? 'register' : 'login');
                             setError('');
                           }}
-                          className="text-sm font-medium text-zinc-500 hover:text-zinc-900"
+                          className="block w-full text-sm font-medium text-zinc-500 hover:text-zinc-900"
                         >
                           {driverAuthMode === 'login' ? "Don't have an account? Register" : "Already have an account? Login"}
                         </button>
+                        <div className="pt-4 border-t border-zinc-100">
+                          <button 
+                            onClick={() => setView('user')}
+                            className="text-xs font-bold text-zinc-400 hover:text-zinc-900 uppercase tracking-wider"
+                          >
+                            Back to User Login
+                          </button>
+                        </div>
                       </div>
                     </>
                   )}
