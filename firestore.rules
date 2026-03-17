@@ -42,12 +42,14 @@ service cloud.firestore {
     // for login and registration, but we should warn the user to use Firebase Auth.
     
     function isAdmin() {
-      // This will only work if the admin is logged in via Firebase Auth
-      // For now, we'll allow admin operations if they are coming from the admin view
-      // but rules can't detect "view". 
-      // We'll allow read/write to admins collection for login purposes.
       return isAuthenticated() &&
         (get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role in ['admin', 'owner'] ||
+          (request.auth.token.email == "digitalserviceindia84@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function isOwner() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'owner' ||
           (request.auth.token.email == "digitalserviceindia84@gmail.com" && request.auth.token.email_verified == true));
     }
 
@@ -109,49 +111,50 @@ service cloud.firestore {
 
     match /admins/{adminId} {
       // Allow public read for login (limit 1)
-      allow read: if isAdmin() || (request.query.limit <= 1);
-      allow write: if isAdmin();
+      allow read: if isOwner() || (request.query.limit <= 1) || (isAuthenticated() && request.auth.uid == adminId);
+      allow write: if isOwner();
     }
 
     match /users/{userId} {
-      // Allow public read for login/check (limit 1)
-      allow read: if true; 
+      // Allow public read only for login check (limit 1)
+      allow read: if isAdmin() || isOwner() || (request.query.limit <= 1) || (isAuthenticated() && request.auth.uid == userId); 
       allow create: if isValidUser(request.resource.data);
-      allow update: if true; // Insecure, but needed for manual auth updates
+      allow update: if isAdmin() || isOwner() || (isAuthenticated() && request.auth.uid == userId);
     }
 
     match /drivers/{driverId} {
-      allow read: if true;
+      // Allow public read only for login check (limit 1)
+      allow read: if isAdmin() || isOwner() || (request.query.limit <= 1) || (isAuthenticated() && request.auth.uid == driverId);
       allow create: if isValidDriver(request.resource.data);
-      allow update: if true;
+      allow update: if isAdmin() || isOwner() || (isAuthenticated() && request.auth.uid == driverId);
     }
 
     match /vehicles/{vehicleId} {
-      allow read: if true;
-      allow write: if true;
+      allow read: if isAdmin() || isOwner() || (isAuthenticated() && resource.data.driver_id == request.auth.uid);
+      allow write: if isAdmin() || isOwner() || (isAuthenticated() && request.resource.data.driver_id == request.auth.uid);
     }
 
     match /rides/{rideId} {
-      allow read: if true;
+      allow read: if isAdmin() || isOwner() || (isAuthenticated() && (resource.data.user_id == request.auth.uid || resource.data.driver_id == request.auth.uid || resource.data.status == 'pending'));
       allow create: if isValidRide(request.resource.data);
-      allow update: if isValidRide(request.resource.data);
+      allow update: if isAdmin() || isOwner() || (isAuthenticated() && (resource.data.user_id == request.auth.uid || resource.data.driver_id == request.auth.uid || (resource.data.status == 'pending' && request.resource.data.status == 'accepted')));
     }
 
     match /transactions/{transactionId} {
-      allow read: if true;
-      allow write: if true;
+      allow read: if isAdmin() || isOwner() || (isAuthenticated() && resource.data.driver_id == request.auth.uid);
+      allow write: if isAdmin() || isOwner();
     }
 
     match /withdrawal_requests/{requestId} {
-      allow read: if true;
-      allow create: if true;
-      allow update: if true;
+      allow read: if isAdmin() || isOwner() || (isAuthenticated() && resource.data.driver_id == request.auth.uid);
+      allow create: if true; // Allow drivers to request
+      allow update: if isAdmin() || isOwner();
     }
 
     match /notifications/{notificationId} {
-      allow read: if true;
-      allow create: if true; // Should be isAdmin() but manual auth blocks it
-      allow update: if true;
+      allow read: if isAdmin() || isOwner() || isAuthenticated();
+      allow create: if isAdmin() || isOwner();
+      allow update: if isAdmin() || isOwner() || (isAuthenticated() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read_by']));
     }
 
     // Default deny

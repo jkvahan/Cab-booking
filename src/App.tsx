@@ -444,6 +444,7 @@ export default function App() {
     let unsubscribeNotifications: () => void;
     let unsubscribeDriverData: () => void;
     let unsubscribeDriverTransactions: () => void;
+    let unsubscribeAdmins: () => void;
 
     // Notification Listener for all views
     let notifQuery;
@@ -580,6 +581,14 @@ export default function App() {
         const rides = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Ride));
         setAdminRides(rides);
       }, (err) => handleFirestoreError(err, OperationType.LIST, 'rides'));
+
+      // Only owner can see other admins
+      if (user.role === 'owner') {
+        unsubscribeAdmins = onSnapshot(collection(db, 'admins'), (snapshot) => {
+          const admins = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id }));
+          setOtherAdmins(admins);
+        }, (err) => handleFirestoreError(err, OperationType.LIST, 'admins'));
+      }
     }
 
     return () => {
@@ -592,6 +601,7 @@ export default function App() {
       unsubscribeNotifications?.();
       unsubscribeDriverData?.();
       unsubscribeDriverTransactions?.();
+      unsubscribeAdmins?.();
     };
   }, [view, user, isAuthReady]);
 
@@ -600,7 +610,12 @@ export default function App() {
   const handleUserLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const q = query(collection(db, 'users'), where('phone', '==', userLoginData.phone), where('password', '==', userLoginData.password));
+      const q = query(
+        collection(db, 'users'), 
+        where('phone', '==', userLoginData.phone), 
+        where('password', '==', userLoginData.password),
+        limit(1)
+      );
       const snapshot = await getDocs(q);
       if (!snapshot.empty) {
         const userData = { ...snapshot.docs[0].data(), id: snapshot.docs[0].id, role: 'user' };
@@ -653,8 +668,12 @@ export default function App() {
 
   const handleAddAdmin = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (user.role !== 'owner') {
+      alert("Only owners can manage admins!");
+      return;
+    }
     if (newAdmin.role === 'owner') {
-      alert("Cannot create another owner!");
+      alert("Cannot create another owner via this form!");
       return;
     }
     try {
@@ -672,6 +691,10 @@ export default function App() {
   };
 
   const handleRemoveAdmin = async (id: string) => {
+    if (user.role !== 'owner') {
+      alert("Only owners can manage admins!");
+      return;
+    }
     if (id === user.id) {
       alert("You cannot remove yourself!");
       return;
@@ -852,7 +875,12 @@ export default function App() {
     
     try {
       if (adminLoginStep === 'credentials') {
-        const q = query(collection(db, 'admins'), where('username', '==', loginData.username), where('password', '==', loginData.password));
+        const q = query(
+          collection(db, 'admins'), 
+          where('username', '==', loginData.username), 
+          where('password', '==', loginData.password),
+          limit(1)
+        );
         const snapshot = await getDocs(q);
         if (!snapshot.empty) {
           setTempAdminId(snapshot.docs[0].id);
@@ -916,7 +944,12 @@ export default function App() {
   const handleDriverLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const q = query(collection(db, 'drivers'), where('phone', '==', loginData.phone), where('password', '==', loginData.password));
+      const q = query(
+        collection(db, 'drivers'), 
+        where('phone', '==', loginData.phone), 
+        where('password', '==', loginData.password),
+        limit(1)
+      );
       const snapshot = await getDocs(q);
       if (!snapshot.empty) {
         const driverData = { ...snapshot.docs[0].data(), id: snapshot.docs[0].id, role: 'driver' };
@@ -1929,59 +1962,62 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="bg-white rounded-2xl border border-zinc-200 overflow-hidden">
-                    <div className="p-6 border-b border-zinc-100">
-                      <h3 className="font-bold text-lg">Manage Admins</h3>
-                    </div>
-                    <div className="p-6 space-y-4">
-                      <form onSubmit={handleAddAdmin} className="flex flex-col sm:flex-row gap-2">
-                        <input
-                          type="text"
-                          placeholder="Admin Username"
-                          className="flex-1 px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm"
-                          value={newAdmin.username}
-                          onChange={e => setNewAdmin({ ...newAdmin, username: e.target.value })}
-                        />
-                        <input
-                          type="password"
-                          placeholder="Password"
-                          className="flex-1 px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm"
-                          value={newAdmin.password}
-                          onChange={e => setNewAdmin({ ...newAdmin, password: e.target.value })}
-                        />
-                        <input
-                          type="text"
-                          maxLength={4}
-                          placeholder="4-Digit PIN"
-                          required
-                          className="w-24 px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm"
-                          value={newAdmin.pin}
-                          onChange={e => setNewAdmin({ ...newAdmin, pin: e.target.value.replace(/\D/g, '').slice(0, 4) })}
-                        />
-                        <select 
-                          className="px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm"
-                          value={newAdmin.role}
-                          onChange={e => setNewAdmin({ ...newAdmin, role: e.target.value as 'admin' | 'owner' })}
-                        >
-                          <option value="admin">Admin</option>
-                        </select>
-                        <button className="bg-zinc-900 text-white px-4 py-2 rounded-lg text-sm font-bold">Add Admin</button>
-                      </form>
-                      <div className="divide-y divide-zinc-100">
-                        {otherAdmins.map(admin => (
-                          <div key={admin.id} className="py-3 flex justify-between items-center">
-                            <div className="flex items-center gap-2">
-                              <span className="font-medium text-sm">{admin.username}</span>
-                              <span className="text-[10px] bg-zinc-100 px-1.5 py-0.5 rounded uppercase font-bold text-zinc-500">{admin.role}</span>
+                  {user.role === 'owner' && (
+                    <div className="bg-white rounded-2xl border border-zinc-200 overflow-hidden">
+                      <div className="p-6 border-b border-zinc-100">
+                        <h3 className="font-bold text-lg">Manage Admins</h3>
+                      </div>
+                      <div className="p-6 space-y-4">
+                        <form onSubmit={handleAddAdmin} className="flex flex-col sm:flex-row gap-2">
+                          <input
+                            type="text"
+                            placeholder="Admin Username"
+                            className="flex-1 px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm"
+                            value={newAdmin.username}
+                            onChange={e => setNewAdmin({ ...newAdmin, username: e.target.value })}
+                          />
+                          <input
+                            type="password"
+                            placeholder="Password"
+                            className="flex-1 px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm"
+                            value={newAdmin.password}
+                            onChange={e => setNewAdmin({ ...newAdmin, password: e.target.value })}
+                          />
+                          <input
+                            type="text"
+                            maxLength={4}
+                            placeholder="4-Digit PIN"
+                            required
+                            className="w-24 px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm"
+                            value={newAdmin.pin}
+                            onChange={e => setNewAdmin({ ...newAdmin, pin: e.target.value.replace(/\D/g, '').slice(0, 4) })}
+                          />
+                          <select 
+                            className="px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm"
+                            value={newAdmin.role}
+                            onChange={e => setNewAdmin({ ...newAdmin, role: e.target.value as 'admin' | 'owner' })}
+                          >
+                            <option value="admin">Admin</option>
+                            <option value="owner">Owner</option>
+                          </select>
+                          <button className="bg-zinc-900 text-white px-4 py-2 rounded-lg text-sm font-bold">Add Admin</button>
+                        </form>
+                        <div className="divide-y divide-zinc-100">
+                          {otherAdmins.map(admin => (
+                            <div key={admin.id} className="py-3 flex justify-between items-center">
+                              <div className="flex items-center gap-2">
+                                <span className="font-medium text-sm">{admin.username}</span>
+                                <span className="text-[10px] bg-zinc-100 px-1.5 py-0.5 rounded uppercase font-bold text-zinc-500">{admin.role}</span>
+                              </div>
+                              {admin.role !== 'owner' && (
+                                <button onClick={() => handleRemoveAdmin(admin.id)} className="text-rose-600 text-xs font-bold">Remove</button>
+                              )}
                             </div>
-                            {admin.role !== 'owner' && (
-                              <button onClick={() => handleRemoveAdmin(admin.id)} className="text-rose-600 text-xs font-bold">Remove</button>
-                            )}
-                          </div>
-                        ))}
+                          ))}
+                        </div>
                       </div>
                     </div>
-                  </div>
+                  )}
 
                   <div className="bg-white rounded-2xl border border-zinc-200 overflow-hidden">
                     <div className="p-6 border-b border-zinc-100 flex items-center gap-2">
