@@ -150,27 +150,35 @@ interface Notification {
 // --- Components ---
 
 const Navbar = ({ activeView, setView, onLogout, user }: { activeView: View, setView: (v: View) => void, onLogout?: () => void, user: any }) => (
-  <nav className="fixed top-0 left-0 right-0 bg-white/90 backdrop-blur-md border-b border-zinc-200 z-50">
-    <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
-      <div className="flex items-center gap-2">
-        <div className="bg-zinc-900 p-1.5 rounded-lg">
-          <Car className="text-white w-4 h-4 sm:w-5 sm:h-5" />
-        </div>
-        <span className="font-bold text-lg sm:text-xl tracking-tight">CabGo</span>
+  <nav className="fixed top-0 left-0 right-0 glass z-50 m-4 rounded-2xl">
+    <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
+      <div className="flex items-center gap-3">
+        <motion.div 
+          whileHover={{ rotate: 360 }}
+          transition={{ duration: 0.5 }}
+          className="bg-gradient-to-br from-orange-500 to-rose-600 p-2 rounded-xl shadow-lg"
+        >
+          <Car className="text-white w-5 h-5" />
+        </motion.div>
+        <span className="font-black text-2xl tracking-tighter gradient-text">CabGo</span>
       </div>
-      <div className="flex items-center gap-2 sm:gap-4">
+      <div className="flex items-center gap-4">
         {user && (
-          <div className="flex items-center gap-2 px-3 py-1 bg-zinc-100 rounded-full">
-            <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
-            <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-600">
+          <motion.div 
+            initial={{ scale: 0 }}
+            animate={{ scale: 1 }}
+            className="flex items-center gap-2 px-4 py-1.5 bg-zinc-900 text-white rounded-full shadow-lg border border-white/10"
+          >
+            <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
+            <span className="text-[10px] font-black uppercase tracking-widest">
               {user.role === 'owner' ? 'Owner' : user.role === 'admin' ? 'Admin' : user.role === 'driver' ? 'Driver' : 'User'}
             </span>
-          </div>
+          </motion.div>
         )}
         {onLogout && (
-          <button onClick={onLogout} className="p-1.5 hover:bg-zinc-100 rounded-full transition-colors flex items-center gap-2 group">
-            <span className="hidden sm:inline text-xs font-bold text-zinc-500 group-hover:text-zinc-900">Logout</span>
-            <LogOut className="w-4 h-4 sm:w-5 sm:h-5 text-zinc-600 group-hover:text-zinc-900" />
+          <button onClick={onLogout} className="p-2 hover:bg-rose-50 rounded-xl transition-all group flex items-center gap-2">
+            <span className="hidden sm:inline text-xs font-bold text-zinc-500 group-hover:text-rose-600">Logout</span>
+            <LogOut className="w-5 h-5 text-zinc-400 group-hover:text-rose-600" />
           </button>
         )}
       </div>
@@ -1430,7 +1438,13 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-zinc-50 font-sans text-zinc-900">
+    <div className="min-h-screen bg-[#f8fafc] font-sans text-zinc-900 overflow-x-hidden">
+      {/* Animated Background Blobs */}
+      <div className="fixed inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-orange-200/30 rounded-full blur-[120px] animate-pulse" />
+        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-indigo-200/30 rounded-full blur-[120px] animate-pulse" style={{ animationDelay: '2s' }} />
+      </div>
+
       {/* Toast Notification */}
       <AnimatePresence>
         {toast && (
@@ -1472,11 +1486,21 @@ export default function App() {
               )}
 
               {!user ? (
-                <div className="max-w-md mx-auto bg-white p-8 rounded-2xl shadow-sm border border-zinc-200">
-                  <h2 className="text-2xl font-bold mb-6 flex items-center gap-2">
-                    {forgotPasswordMode ? <KeyRound className="w-6 h-6" /> : <User className="w-6 h-6" />} 
-                    {forgotPasswordMode ? 'Reset Password' : (userAuthMode === 'login' ? 'User Login' : 'User Registration')}
-                  </h2>
+                  <motion.div 
+                    initial={{ rotateY: -20, opacity: 0 }}
+                    animate={{ rotateY: 0, opacity: 1 }}
+                    className="max-w-md mx-auto glass p-10 rounded-[2.5rem] relative overflow-hidden"
+                  >
+                    <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-orange-500/10 to-rose-500/10 rounded-full -mr-16 -mt-16 blur-2xl" />
+                    
+                    <h2 className="text-3xl font-black mb-8 flex items-center gap-3">
+                      <div className="p-2 bg-zinc-900 rounded-xl shadow-lg">
+                        {forgotPasswordMode ? <KeyRound className="text-white w-6 h-6" /> : <User className="text-white w-6 h-6" />} 
+                      </div>
+                      <span className="gradient-text">
+                        {forgotPasswordMode ? 'Reset' : (userAuthMode === 'login' ? 'Welcome Back' : 'Join CabGo')}
+                      </span>
+                    </h2>
                   {error && (
                     <div className="mb-4 p-3 bg-rose-50 text-rose-600 text-sm rounded-xl border border-rose-100">
                       {error}
@@ -1553,9 +1577,13 @@ export default function App() {
                             </button>
                           </div>
                         )}
-                        <button className="w-full bg-zinc-900 text-white py-3 rounded-xl font-bold hover:bg-zinc-800 transition-all">
-                          {userAuthMode === 'login' ? 'Login' : 'Register'}
-                        </button>
+                        <motion.button 
+                          whileHover={{ scale: 1.02 }}
+                          whileTap={{ scale: 0.98 }}
+                          className="w-full bg-gradient-to-r from-zinc-900 to-zinc-800 text-white py-4 rounded-2xl font-black shadow-xl hover:shadow-2xl transition-all btn-3d"
+                        >
+                          {userAuthMode === 'login' ? 'Login' : 'Create Account'}
+                        </motion.button>
                       </form>
                       <div className="mt-6 text-center space-y-2">
                         <button 
@@ -1583,16 +1611,26 @@ export default function App() {
                         </div>
                       </div>
                     </>
-                  )}
-                </div>
-              ) : (
-                <>
-                  <div className="text-center space-y-2">
-                    <h1 className="text-4xl font-bold tracking-tight">Welcome, {user.name}!</h1>
-                    <p className="text-zinc-500">Where would you like to go today?</p>
+                  </motion.div>
+                ) : (
+                  <>
+                    <div className="text-center space-y-3 mb-10">
+                    <motion.h1 
+                      initial={{ y: 20, opacity: 0 }}
+                      animate={{ y: 0, opacity: 1 }}
+                      className="text-5xl font-black tracking-tighter"
+                    >
+                      Hello, <span className="gradient-text">{user.name.split(' ')[0]}!</span>
+                    </motion.h1>
+                    <p className="text-zinc-500 font-medium">Ready for your next adventure?</p>
                   </div>
 
-                  <div className="bg-white p-6 rounded-2xl shadow-sm border border-zinc-200 space-y-6">
+                  <motion.div 
+                    initial={{ y: 30, opacity: 0 }}
+                    animate={{ y: 0, opacity: 1 }}
+                    className="glass p-8 rounded-[2.5rem] space-y-8 relative overflow-hidden"
+                  >
+                    <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-orange-500 via-rose-500 to-indigo-600" />
                     {/* Trip Type Toggle */}
                     <div className="flex p-1 bg-zinc-100 rounded-xl">
                       <button
@@ -1618,13 +1656,13 @@ export default function App() {
                         <MapComponent pickup={pickupCoords} dropoff={dropoffCoords} />
                       </div>
                       
-                      <div className="relative">
-                        <MapPin className="absolute left-3 top-3 w-5 h-5 text-emerald-500" />
+                      <div className="relative group">
+                        <MapPin className="absolute left-4 top-4 w-5 h-5 text-emerald-500 group-focus-within:scale-110 transition-transform" />
                         <input
                           ref={pickupRef}
                           type="text"
                           placeholder="Pickup Location"
-                          className="w-full pl-10 pr-12 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all"
+                          className="w-full pl-12 pr-12 py-4 bg-white/50 border border-zinc-200 rounded-2xl focus:outline-none focus:ring-4 focus:ring-zinc-900/5 focus:bg-white transition-all shadow-sm hover:shadow-md"
                           value={bookingData.pickup}
                           onChange={e => {
                             setBookingData({ ...bookingData, pickup: e.target.value });
@@ -1635,19 +1673,19 @@ export default function App() {
                         <button 
                           onClick={getCurrentLocation}
                           disabled={isLiveLocationLoading}
-                          className={`absolute right-3 top-3 transition-colors ${isLiveLocationLoading ? 'text-zinc-400 animate-pulse' : 'text-emerald-500 hover:text-emerald-600'}`}
+                          className={`absolute right-4 top-4 transition-all ${isLiveLocationLoading ? 'text-zinc-400 animate-pulse' : 'text-emerald-500 hover:text-emerald-600 hover:scale-110'}`}
                           title="Use Current Location"
                         >
                           <Navigation className="w-5 h-5" />
                         </button>
                       </div>
-                      <div className="relative">
-                        <Navigation className="absolute left-3 top-3 w-5 h-5 text-zinc-400" />
+                      <div className="relative group">
+                        <Navigation className="absolute left-4 top-4 w-5 h-5 text-rose-500 group-focus-within:scale-110 transition-transform" />
                         <input
                           ref={dropoffRef}
                           type="text"
                           placeholder="Dropoff Location"
-                          className="w-full pl-10 pr-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all"
+                          className="w-full pl-12 pr-4 py-4 bg-white/50 border border-zinc-200 rounded-2xl focus:outline-none focus:ring-4 focus:ring-zinc-900/5 focus:bg-white transition-all shadow-sm hover:shadow-md"
                           value={bookingData.dropoff}
                           onChange={e => {
                             setBookingData({ ...bookingData, dropoff: e.target.value });
@@ -1657,12 +1695,12 @@ export default function App() {
                         />
                       </div>
 
-                      <div className="relative">
-                        <div className="absolute left-3 top-3 w-5 h-5 flex items-center justify-center text-zinc-400 font-bold text-xs">KM</div>
+                      <div className="relative group">
+                        <div className="absolute left-4 top-4 w-5 h-5 flex items-center justify-center text-zinc-400 font-black text-[10px] group-focus-within:scale-110 transition-transform">KM</div>
                         <input
                           type="number"
                           placeholder="Total KM (Required)"
-                          className="w-full pl-10 pr-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all"
+                          className="w-full pl-12 pr-4 py-4 bg-white/50 border border-zinc-200 rounded-2xl focus:outline-none focus:ring-4 focus:ring-zinc-900/5 focus:bg-white transition-all shadow-sm hover:shadow-md"
                           value={bookingData.manualDistance}
                           required
                           onChange={e => {
@@ -1670,24 +1708,24 @@ export default function App() {
                             setFareOptions([]);
                           }}
                         />
-                        <p className="text-[10px] text-zinc-400 mt-1 ml-1">Enter KM manually or leave blank for auto-calculation</p>
+                        <p className="text-[10px] font-bold text-zinc-400 mt-2 ml-2 uppercase tracking-widest">Enter KM manually or leave blank</p>
                       </div>
 
-                      <div className="grid grid-cols-2 gap-3">
-                        <div className="relative">
-                          <Clock className="absolute left-3 top-3 w-4 h-4 text-zinc-400" />
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="relative group">
+                          <Clock className="absolute left-4 top-4 w-4 h-4 text-zinc-400 group-focus-within:scale-110 transition-transform" />
                           <input
                             type="date"
-                            className="w-full pl-9 pr-3 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all text-sm"
+                            className="w-full pl-10 pr-3 py-4 bg-white/50 border border-zinc-200 rounded-2xl focus:outline-none focus:ring-4 focus:ring-zinc-900/5 focus:bg-white transition-all text-sm shadow-sm hover:shadow-md"
                             value={bookingData.pickupDate}
                             onChange={e => setBookingData({ ...bookingData, pickupDate: e.target.value })}
                           />
                         </div>
-                        <div className="relative">
-                          <Clock className="absolute left-3 top-3 w-4 h-4 text-zinc-400" />
+                        <div className="relative group">
+                          <Clock className="absolute left-4 top-4 w-4 h-4 text-zinc-400 group-focus-within:scale-110 transition-transform" />
                           <input
                             type="time"
-                            className="w-full pl-9 pr-3 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all text-sm"
+                            className="w-full pl-10 pr-3 py-4 bg-white/50 border border-zinc-200 rounded-2xl focus:outline-none focus:ring-4 focus:ring-zinc-900/5 focus:bg-white transition-all text-sm shadow-sm hover:shadow-md"
                             value={bookingData.pickupTime}
                             onChange={e => setBookingData({ ...bookingData, pickupTime: e.target.value })}
                           />
@@ -1696,14 +1734,22 @@ export default function App() {
                     </div>
 
                     {fareOptions.length === 0 ? (
-                      <button
+                      <motion.button
+                        whileHover={{ scale: 1.02 }}
+                        whileTap={{ scale: 0.98 }}
                         onClick={handleFindRides}
                         disabled={isEstimating || !bookingData.pickup || !bookingData.dropoff}
-                        className="w-full bg-zinc-900 text-white py-4 rounded-xl font-bold hover:bg-zinc-800 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                        className="w-full bg-zinc-900 text-white py-5 rounded-3xl font-black shadow-xl hover:shadow-2xl transition-all disabled:opacity-50 flex items-center justify-center gap-3 btn-3d"
                       >
-                        {isEstimating ? 'Calculating Distance...' : 'Find Rides'}
-                        <Search className="w-5 h-5" />
-                      </button>
+                        {isEstimating ? (
+                          <div className="w-6 h-6 border-4 border-white/30 border-t-white rounded-full animate-spin" />
+                        ) : (
+                          <>
+                            <Search className="w-6 h-6" />
+                            <span className="text-lg">Find Best Rides</span>
+                          </>
+                        )}
+                      </motion.button>
                     ) : (
                       <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
                         {estimatedDistance && (
@@ -1717,49 +1763,63 @@ export default function App() {
                             </div>
                           </div>
                         )}
-                        <div className="grid grid-cols-1 gap-3">
-                          {fareOptions.map(option => (
-                            <button
+                        <div className="grid grid-cols-1 gap-4">
+                          {fareOptions.map((option, idx) => (
+                            <motion.button
                               key={option.type}
+                              initial={{ x: -20, opacity: 0 }}
+                              animate={{ x: 0, opacity: 1 }}
+                              transition={{ delay: idx * 0.1 }}
                               onClick={() => setSelectedOption(option)}
-                              className={`flex items-center justify-between p-4 rounded-xl border-2 transition-all ${
+                              className={`flex items-center justify-between p-5 rounded-3xl border-2 transition-all relative overflow-hidden group ${
                                 selectedOption?.type === option.type 
-                                ? 'border-zinc-900 bg-zinc-50' 
-                                : 'border-zinc-100 hover:border-zinc-200'
+                                ? 'border-zinc-900 bg-zinc-900 text-white shadow-2xl -translate-y-1' 
+                                : 'border-zinc-100 bg-white/50 hover:border-zinc-300 hover:-translate-y-1 shadow-sm hover:shadow-md'
                               }`}
                             >
-                              <div className="flex items-center gap-3">
-                                <div className="p-2 bg-zinc-100 rounded-lg">
-                                  <Car className="w-6 h-6" />
+                              {selectedOption?.type === option.type && (
+                                <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-white/10 to-transparent rounded-full -mr-16 -mt-16 blur-2xl" />
+                              )}
+                              <div className="flex items-center gap-4 relative z-10">
+                                <div className={`p-3 rounded-2xl transition-colors ${selectedOption?.type === option.type ? 'bg-white/20' : 'bg-zinc-100'}`}>
+                                  <Car className={`w-7 h-7 ${selectedOption?.type === option.type ? 'text-white' : 'text-zinc-900'}`} />
                                 </div>
                                 <div className="text-left">
                                   <div className="flex items-center gap-2">
-                                    <p className="font-bold">{option.type}</p>
-                                    <span className="text-[10px] px-1.5 py-0.5 bg-zinc-200 rounded text-zinc-600 font-medium">
+                                    <p className="font-black text-lg">{option.type}</p>
+                                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-black uppercase tracking-widest ${selectedOption?.type === option.type ? 'bg-white/20 text-white' : 'bg-zinc-200 text-zinc-600'}`}>
                                       {VEHICLE_RATES[option.type as keyof typeof VEHICLE_RATES]?.description}
                                     </span>
                                   </div>
-                                  <p className="text-xs text-zinc-500">Available • 2-5 min away</p>
+                                  <p className={`text-xs font-medium ${selectedOption?.type === option.type ? 'text-zinc-400' : 'text-zinc-500'}`}>Available • 2-5 min away</p>
                                 </div>
                               </div>
-                              <div className="text-right">
-                                <p className="text-lg font-black">₹{option.fare}</p>
-                                <p className="text-[10px] text-zinc-400">Incl. taxes</p>
+                              <div className="text-right relative z-10">
+                                <p className="text-2xl font-black">₹{option.fare}</p>
+                                <p className={`text-[10px] font-bold uppercase tracking-widest ${selectedOption?.type === option.type ? 'text-zinc-500' : 'text-zinc-400'}`}>Incl. taxes</p>
                               </div>
-                            </button>
+                            </motion.button>
                           ))}
                         </div>
-                        <button
+                        <motion.button
+                          whileHover={{ scale: 1.02 }}
+                          whileTap={{ scale: 0.98 }}
                           onClick={handleBookRide}
                           disabled={isBooking}
-                          className="w-full bg-emerald-600 text-white py-4 rounded-xl font-bold hover:bg-emerald-700 transition-all flex items-center justify-center gap-2"
+                          className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 text-white py-5 rounded-3xl font-black shadow-xl hover:shadow-2xl transition-all disabled:opacity-50 btn-3d flex items-center justify-center gap-3"
                         >
-                          {isBooking ? 'Booking...' : `Confirm ${selectedOption?.type}`}
-                          <CheckCircle2 className="w-5 h-5" />
-                        </button>
+                          {isBooking ? (
+                            <div className="w-6 h-6 border-4 border-white/30 border-t-white rounded-full animate-spin" />
+                          ) : (
+                            <>
+                              <CheckCircle2 className="w-6 h-6" />
+                              <span className="text-lg uppercase tracking-widest">Confirm {selectedOption?.type}</span>
+                            </>
+                          )}
+                        </motion.button>
                       </div>
                     )}
-                  </div>
+                  </motion.div>
 
                   {myRides.length > 0 && (
                     <div className="space-y-4">
@@ -2093,19 +2153,33 @@ export default function App() {
                   ) : (
                     user?.role === 'admin' || user?.role === 'owner' ? (
                       <div className="space-y-8">
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
-                          <div className="bg-white p-4 sm:p-6 rounded-2xl border border-zinc-200">
-                            <p className="text-zinc-500 text-xs sm:text-sm font-medium">Total Rides</p>
-                            <p className="text-2xl sm:text-3xl font-bold">{adminRides.length}</p>
+                        <div className="flex items-center justify-between mb-8">
+                          <h1 className="text-4xl font-black tracking-tighter gradient-text">Admin Command Center</h1>
+                          <div className="flex items-center gap-2 px-4 py-2 glass rounded-2xl">
+                            <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
+                            <span className="text-xs font-black uppercase tracking-widest">System Live</span>
                           </div>
-                          <div className="bg-white p-4 sm:p-6 rounded-2xl border border-zinc-200">
-                            <p className="text-zinc-500 text-xs sm:text-sm font-medium">Active Drivers</p>
-                            <p className="text-2xl sm:text-3xl font-bold">{adminDrivers.filter(d => d.status === 'active').length}</p>
-                          </div>
-                          <div className="bg-white p-4 sm:p-6 rounded-2xl border border-zinc-200">
-                            <p className="text-zinc-500 text-xs sm:text-sm font-medium">Total Revenue</p>
-                            <p className="text-2xl sm:text-3xl font-bold text-emerald-600">₹{adminRides.reduce((acc, r) => acc + r.fare, 0)}</p>
-                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                          {[
+                            { label: 'Total Rides', value: adminRides.length, color: 'from-blue-500 to-indigo-600', icon: Car },
+                            { label: 'Active Drivers', value: adminDrivers.filter(d => d.status === 'active').length, color: 'from-orange-500 to-rose-600', icon: Users },
+                            { label: 'Total Revenue', value: `₹${adminRides.reduce((acc, r) => acc + r.fare, 0)}`, color: 'from-emerald-500 to-teal-600', icon: IndianRupee }
+                          ].map((stat, i) => (
+                            <motion.div 
+                              key={i}
+                              initial={{ y: 20, opacity: 0 }}
+                              animate={{ y: 0, opacity: 1 }}
+                              transition={{ delay: i * 0.1 }}
+                              className="glass p-8 rounded-3xl relative overflow-hidden group hover:-translate-y-1 transition-all"
+                            >
+                              <div className={`absolute top-0 right-0 w-24 h-24 bg-gradient-to-br ${stat.color} opacity-10 rounded-full -mr-12 -mt-12 blur-2xl group-hover:scale-150 transition-all`} />
+                              <stat.icon className="w-6 h-6 text-zinc-400 mb-4" />
+                              <p className="text-[10px] font-black uppercase tracking-widest text-zinc-500">{stat.label}</p>
+                              <p className="text-3xl font-black">{stat.value}</p>
+                            </motion.div>
+                          ))}
                         </div>
 
                   {user.role === 'owner' && (
@@ -2674,15 +2748,20 @@ export default function App() {
                         </div>
                       </div>
                     </>
-                  )}
+                  )
                 </div>
               ) : (
                 user?.role === 'driver' ? (
                   <div className="space-y-8">
-                  <div className="bg-zinc-900 text-white p-8 rounded-3xl relative overflow-hidden">
-                    <div className="relative z-10">
-                      <p className="text-zinc-400 font-medium mb-1">Wallet Balance</p>
-                      <h2 className="text-5xl font-bold mb-6">₹{driverWallet.balance}</h2>
+                    <motion.div 
+                      initial={{ scale: 0.9, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                      className="bg-zinc-900 text-white p-10 rounded-[2.5rem] relative overflow-hidden shadow-2xl"
+                    >
+                      <div className="absolute top-0 right-0 w-64 h-64 bg-gradient-to-br from-emerald-500/20 to-transparent rounded-full -mr-32 -mt-32 blur-3xl" />
+                      <div className="relative z-10">
+                        <p className="text-zinc-400 font-bold uppercase tracking-widest text-xs mb-2">Total Earnings</p>
+                        <h2 className="text-6xl font-black mb-8">₹{driverWallet.balance}</h2>
                       <div className="flex flex-wrap gap-3">
                         <button 
                           onClick={handleRequestWithdrawal}
@@ -2701,7 +2780,7 @@ export default function App() {
                       </div>
                     </div>
                     <Wallet className="absolute -right-8 -bottom-8 w-48 h-48 text-white/5" />
-                  </div>
+                  </motion.div>
 
                   {completedRides.length > 0 && (
                     <div className="bg-white p-6 rounded-2xl border border-zinc-200 shadow-sm space-y-4">
@@ -2981,11 +3060,11 @@ export default function App() {
                         <button onClick={() => setView('user')} className="bg-zinc-900 text-white px-6 py-2 rounded-xl font-bold">Return to Home</button>
                       </div>
                     )
-                  )}
+                  )
                 </motion.div>
               )}
-        </AnimatePresence>
-      </main>
+            </AnimatePresence>
+          </main>
 
       {/* Notification Modal */}
       <AnimatePresence>
