@@ -149,7 +149,7 @@ interface Notification {
 
 // --- Components ---
 
-const Navbar = ({ activeView, setView, onLogout }: { activeView: View, setView: (v: View) => void, onLogout?: () => void }) => (
+const Navbar = ({ activeView, setView, onLogout, user }: { activeView: View, setView: (v: View) => void, onLogout?: () => void, user: any }) => (
   <nav className="fixed top-0 left-0 right-0 bg-white/90 backdrop-blur-md border-b border-zinc-200 z-50">
     <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
       <div className="flex items-center gap-2 cursor-pointer" onClick={() => setView('user')}>
@@ -159,11 +159,14 @@ const Navbar = ({ activeView, setView, onLogout }: { activeView: View, setView: 
         <span className="font-bold text-lg sm:text-xl tracking-tight">CabGo</span>
       </div>
       <div className="flex items-center gap-2 sm:gap-4">
-        {activeView === 'user' && (
-          <>
-            <button onClick={() => setView('driver')} className="text-xs sm:text-sm font-medium text-zinc-600 hover:text-zinc-900 bg-zinc-100 px-2 py-1 rounded-lg">Driver</button>
-            <button onClick={() => setView('admin')} className="text-xs sm:text-sm font-medium text-zinc-600 hover:text-zinc-900 bg-zinc-100 px-2 py-1 rounded-lg">Admin</button>
-          </>
+        {user?.role === 'driver' && activeView !== 'driver' && (
+          <button onClick={() => setView('driver')} className="text-xs sm:text-sm font-medium text-zinc-600 hover:text-zinc-900 bg-zinc-100 px-2 py-1 rounded-lg">Driver Dashboard</button>
+        )}
+        {(user?.role === 'admin' || user?.role === 'owner') && activeView !== 'admin' && (
+          <button onClick={() => setView('admin')} className="text-xs sm:text-sm font-medium text-zinc-600 hover:text-zinc-900 bg-zinc-100 px-2 py-1 rounded-lg">Admin Dashboard</button>
+        )}
+        {user?.role !== 'user' && activeView !== 'user' && (
+          <button onClick={() => setView('user')} className="text-xs sm:text-sm font-medium text-zinc-600 hover:text-zinc-900 bg-zinc-100 px-2 py-1 rounded-lg">User View</button>
         )}
         {onLogout && (
           <button onClick={onLogout} className="p-1.5 hover:bg-zinc-100 rounded-full transition-colors">
@@ -196,6 +199,16 @@ export default function App() {
 
   const changeView = (newView: View) => {
     if (newView !== view) {
+      // Permission checks
+      if (newView === 'admin' && user?.role !== 'admin' && user?.role !== 'owner') {
+        setToast({ message: 'Access Denied: Admin privileges required', type: 'error' });
+        return;
+      }
+      if (newView === 'driver' && user?.role !== 'driver') {
+        setToast({ message: 'Access Denied: Driver account required', type: 'error' });
+        return;
+      }
+
       window.history.pushState({ view: newView }, '', '');
       setView(newView);
       setTrackedRide(null);
@@ -646,6 +659,7 @@ export default function App() {
       if (!snapshot.empty) {
         const userData = { ...snapshot.docs[0].data(), id: snapshot.docs[0].id, role: 'user' };
         setUser(userData);
+        setView('user');
         setError('');
       } else {
         setError('Invalid user credentials');
@@ -945,6 +959,7 @@ export default function App() {
         if (adminDoc.exists() && adminDoc.data().pin === adminPin) {
           const adminData = { ...adminDoc.data(), id: adminDoc.id };
           setUser(adminData);
+          setView('admin');
           setAdminLoginStep('credentials');
           setTempAdminId(null);
           setAdminPin('');
@@ -1023,6 +1038,7 @@ export default function App() {
       if (driverSnap.exists() && driverSnap.data().pin === driverPin) {
         const driverData = { ...driverSnap.data(), id: driverSnap.id, role: 'driver' };
         setUser(driverData);
+        setView('driver');
         setDriverLoginStep('credentials');
         setTempDriverId(null);
         setDriverPin('');
@@ -1434,7 +1450,7 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {user && <Navbar activeView={view} setView={changeView} onLogout={user ? handleLogout : undefined} />}
+      {user && <Navbar activeView={view} setView={changeView} onLogout={user ? handleLogout : undefined} user={user} />}
 
       <main className={`${user ? 'pt-20' : 'pt-8'} pb-12 px-3 sm:px-4 max-w-4xl mx-auto`}>
         <AnimatePresence mode="wait">
@@ -2074,21 +2090,22 @@ export default function App() {
                       )}
                     </div>
                   ) : (
-                <div className="space-y-8">
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
-                    <div className="bg-white p-4 sm:p-6 rounded-2xl border border-zinc-200">
-                      <p className="text-zinc-500 text-xs sm:text-sm font-medium">Total Rides</p>
-                      <p className="text-2xl sm:text-3xl font-bold">{adminRides.length}</p>
-                    </div>
-                    <div className="bg-white p-4 sm:p-6 rounded-2xl border border-zinc-200">
-                      <p className="text-zinc-500 text-xs sm:text-sm font-medium">Active Drivers</p>
-                      <p className="text-2xl sm:text-3xl font-bold">{adminDrivers.filter(d => d.status === 'active').length}</p>
-                    </div>
-                    <div className="bg-white p-4 sm:p-6 rounded-2xl border border-zinc-200">
-                      <p className="text-zinc-500 text-xs sm:text-sm font-medium">Total Revenue</p>
-                      <p className="text-2xl sm:text-3xl font-bold text-emerald-600">₹{adminRides.reduce((acc, r) => acc + r.fare, 0)}</p>
-                    </div>
-                  </div>
+                    user?.role === 'admin' || user?.role === 'owner' ? (
+                      <div className="space-y-8">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
+                          <div className="bg-white p-4 sm:p-6 rounded-2xl border border-zinc-200">
+                            <p className="text-zinc-500 text-xs sm:text-sm font-medium">Total Rides</p>
+                            <p className="text-2xl sm:text-3xl font-bold">{adminRides.length}</p>
+                          </div>
+                          <div className="bg-white p-4 sm:p-6 rounded-2xl border border-zinc-200">
+                            <p className="text-zinc-500 text-xs sm:text-sm font-medium">Active Drivers</p>
+                            <p className="text-2xl sm:text-3xl font-bold">{adminDrivers.filter(d => d.status === 'active').length}</p>
+                          </div>
+                          <div className="bg-white p-4 sm:p-6 rounded-2xl border border-zinc-200">
+                            <p className="text-zinc-500 text-xs sm:text-sm font-medium">Total Revenue</p>
+                            <p className="text-2xl sm:text-3xl font-bold text-emerald-600">₹{adminRides.reduce((acc, r) => acc + r.fare, 0)}</p>
+                          </div>
+                        </div>
 
                   {user.role === 'owner' && (
                     <div className="bg-white rounded-2xl border border-zinc-200 overflow-hidden">
@@ -2488,9 +2505,19 @@ export default function App() {
                     </div>
                   )}
                 </div>
+                    ) : (
+                      <div className="text-center py-20 space-y-4">
+                        <div className="w-20 h-20 bg-rose-50 rounded-full flex items-center justify-center mx-auto">
+                          <ShieldCheck className="w-10 h-10 text-rose-600" />
+                        </div>
+                        <h2 className="text-2xl font-bold">Unauthorized Access</h2>
+                        <p className="text-zinc-500">You do not have permission to view the Admin Dashboard.</p>
+                        <button onClick={() => setView('user')} className="bg-zinc-900 text-white px-6 py-2 rounded-xl font-bold">Return to Home</button>
+                      </div>
+                    )
+                  )}
+                </motion.div>
               )}
-            </motion.div>
-          )}
 
           {/* DRIVER VIEW */}
           {view === 'driver' && (
@@ -2649,7 +2676,8 @@ export default function App() {
                   )}
                 </div>
               ) : (
-                <div className="space-y-8">
+                user?.role === 'driver' ? (
+                  <div className="space-y-8">
                   <div className="bg-zinc-900 text-white p-8 rounded-3xl relative overflow-hidden">
                     <div className="relative z-10">
                       <p className="text-zinc-400 font-medium mb-1">Wallet Balance</p>
@@ -2942,9 +2970,19 @@ export default function App() {
                     </div>
                   </div>
                 </div>
+                    ) : (
+                      <div className="text-center py-20 space-y-4">
+                        <div className="w-20 h-20 bg-rose-50 rounded-full flex items-center justify-center mx-auto">
+                          <Car className="w-10 h-10 text-rose-600" />
+                        </div>
+                        <h2 className="text-2xl font-bold">Unauthorized Access</h2>
+                        <p className="text-zinc-500">You do not have permission to view the Driver Dashboard.</p>
+                        <button onClick={() => setView('user')} className="bg-zinc-900 text-white px-6 py-2 rounded-xl font-bold">Return to Home</button>
+                      </div>
+                    )
+                  )}
+                </motion.div>
               )}
-            </motion.div>
-          )}
         </AnimatePresence>
       </main>
 
