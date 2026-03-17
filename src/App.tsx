@@ -319,7 +319,10 @@ export default function App() {
 
   // Driver Auth States
   const [driverAuthMode, setDriverAuthMode] = useState<'login' | 'register'>('login');
-  const [loginData, setLoginData] = useState({ username: '', phone: '', password: '', name: '' });
+  const [driverLoginStep, setDriverLoginStep] = useState<'credentials' | 'pin'>('credentials');
+  const [tempDriverId, setTempDriverId] = useState<string | null>(null);
+  const [driverPin, setDriverPin] = useState('');
+  const [loginData, setLoginData] = useState({ username: '', phone: '', password: '', name: '', pin: '' });
 
   // Forgot Password States
   const [forgotPasswordMode, setForgotPasswordMode] = useState(false);
@@ -990,14 +993,35 @@ export default function App() {
       );
       const snapshot = await getDocs(q);
       if (!snapshot.empty) {
-        const driverData = { ...snapshot.docs[0].data(), id: snapshot.docs[0].id, role: 'driver' };
-        setUser(driverData);
+        setTempDriverId(snapshot.docs[0].id);
+        setDriverLoginStep('pin');
         setError('');
       } else {
         setError('Invalid driver credentials');
       }
     } catch (err: any) {
       setError(err.message || 'Login failed');
+    }
+  };
+
+  const handleDriverPinVerify = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!tempDriverId) return;
+    try {
+      const driverRef = doc(db, 'drivers', tempDriverId);
+      const driverSnap = await getDoc(driverRef);
+      if (driverSnap.exists() && driverSnap.data().pin === driverPin) {
+        const driverData = { ...driverSnap.data(), id: driverSnap.id, role: 'driver' };
+        setUser(driverData);
+        setDriverLoginStep('credentials');
+        setTempDriverId(null);
+        setDriverPin('');
+        setError('');
+      } else {
+        setError('Invalid Driver PIN');
+      }
+    } catch (err: any) {
+      setError(err.message || 'PIN verification failed');
     }
   };
 
@@ -1015,6 +1039,7 @@ export default function App() {
         name: loginData.name,
         phone: loginData.phone,
         password: loginData.password,
+        pin: loginData.pin,
         wallet_balance: 0,
         status: 'pending',
         created_at: new Date().toISOString()
@@ -2478,6 +2503,35 @@ export default function App() {
                         Back to Login
                       </button>
                     </form>
+                  ) : driverLoginStep === 'pin' ? (
+                    <form onSubmit={handleDriverPinVerify} className="space-y-6">
+                      <div className="text-center space-y-2">
+                        <div className="w-16 h-16 bg-zinc-100 rounded-full flex items-center justify-center mx-auto">
+                          <Lock className="w-8 h-8 text-zinc-900" />
+                        </div>
+                        <p className="text-sm text-zinc-500">Enter your 4-digit security PIN</p>
+                      </div>
+                      <input
+                        type="password"
+                        placeholder="Security PIN"
+                        maxLength={4}
+                        required
+                        className="w-full px-4 py-4 bg-zinc-50 border border-zinc-200 rounded-xl text-center text-2xl tracking-[1em] focus:outline-none focus:ring-2 focus:ring-zinc-900"
+                        value={driverPin}
+                        onChange={e => setDriverPin(e.target.value)}
+                        autoFocus
+                      />
+                      <button className="w-full bg-zinc-900 text-white py-4 rounded-xl font-bold hover:bg-zinc-800 transition-all shadow-lg shadow-zinc-200">
+                        Verify & Access Dashboard
+                      </button>
+                      <button 
+                        type="button"
+                        onClick={() => { setDriverLoginStep('credentials'); setTempDriverId(null); setDriverPin(''); }}
+                        className="w-full text-sm font-medium text-zinc-500 hover:text-zinc-900"
+                      >
+                        Back to Credentials
+                      </button>
+                    </form>
                   ) : (
                     <>
                       <form onSubmit={driverAuthMode === 'login' ? handleDriverLogin : handleDriverRegister} className="space-y-4">
@@ -2507,6 +2561,17 @@ export default function App() {
                           value={loginData.password}
                           onChange={e => setLoginData({ ...loginData, password: e.target.value })}
                         />
+                        {driverAuthMode === 'register' && (
+                          <input
+                            type="password"
+                            placeholder="Set 4-Digit Security PIN"
+                            maxLength={4}
+                            required
+                            className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900"
+                            value={loginData.pin}
+                            onChange={e => setLoginData({ ...loginData, pin: e.target.value })}
+                          />
+                        )}
                         {driverAuthMode === 'login' && (
                           <div className="text-right">
                             <button 
