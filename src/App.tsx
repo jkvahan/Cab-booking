@@ -1343,34 +1343,63 @@ export default function App() {
   };
 
   const handleCancelRide = async (rideId: string) => {
+    if (!user) return;
     if (!confirm("Cancelling after acceptance will result in a ₹50 fine. Continue?")) return;
+    
+    setIsActionLoading(true);
     try {
       const rideRef = doc(db, 'rides', rideId);
+      const rideSnap = await getDoc(rideRef);
+      
+      if (!rideSnap.exists()) {
+        setToast({ message: 'Ride not found', type: 'error' });
+        return;
+      }
+
+      const rideData = rideSnap.data();
+      const driverId = rideData.driver_id;
+
+      if (!driverId) {
+        setToast({ message: 'No driver assigned to this ride', type: 'error' });
+        return;
+      }
+
+      // 1. Reset the ride to pending
       await updateDoc(rideRef, {
         status: 'pending',
         driver_id: null,
         accepted_at: null,
-        eta: null
+        eta: null,
+        start_otp: null,
+        end_otp: null
       });
 
-      // Fine driver
-      const driverRef = doc(db, 'drivers', user.id);
+      // 2. Fine the driver
+      const driverRef = doc(db, 'drivers', driverId);
       const driverSnap = await getDoc(driverRef);
+      
       if (driverSnap.exists()) {
-        const newBalance = (driverSnap.data().wallet_balance || 0) - 50;
+        const currentBalance = driverSnap.data().wallet_balance || 0;
+        const newBalance = currentBalance - 50;
+        
         await updateDoc(driverRef, { wallet_balance: newBalance });
         
-        // Add transaction
+        // 3. Record the fine transaction
         await addDoc(collection(db, 'transactions'), {
-          driver_id: user.id,
+          driver_id: driverId,
           amount: 50,
           type: 'debit',
-          description: `Fine for cancelling accepted ride: ${rideId}`,
+          description: `Cancellation Fine (Ride ID: ${rideData.tracking_id || rideId})`,
           created_at: new Date().toISOString()
         });
+        
+        setToast({ message: 'Ride cancelled. ₹50 fine deducted from your wallet.', type: 'success' });
       }
     } catch (err) {
+      console.error("Cancellation error:", err);
       handleFirestoreError(err, OperationType.UPDATE, `rides/${rideId}`);
+    } finally {
+      setIsActionLoading(false);
     }
   };
 
