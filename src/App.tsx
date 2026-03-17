@@ -152,25 +152,25 @@ interface Notification {
 const Navbar = ({ activeView, setView, onLogout, user }: { activeView: View, setView: (v: View) => void, onLogout?: () => void, user: any }) => (
   <nav className="fixed top-0 left-0 right-0 bg-white/90 backdrop-blur-md border-b border-zinc-200 z-50">
     <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
-      <div className="flex items-center gap-2 cursor-pointer" onClick={() => setView('user')}>
+      <div className="flex items-center gap-2">
         <div className="bg-zinc-900 p-1.5 rounded-lg">
           <Car className="text-white w-4 h-4 sm:w-5 sm:h-5" />
         </div>
         <span className="font-bold text-lg sm:text-xl tracking-tight">CabGo</span>
       </div>
       <div className="flex items-center gap-2 sm:gap-4">
-        {user?.role === 'driver' && activeView !== 'driver' && (
-          <button onClick={() => setView('driver')} className="text-xs sm:text-sm font-medium text-zinc-600 hover:text-zinc-900 bg-zinc-100 px-2 py-1 rounded-lg">Driver Dashboard</button>
-        )}
-        {(user?.role === 'admin' || user?.role === 'owner') && activeView !== 'admin' && (
-          <button onClick={() => setView('admin')} className="text-xs sm:text-sm font-medium text-zinc-600 hover:text-zinc-900 bg-zinc-100 px-2 py-1 rounded-lg">Admin Dashboard</button>
-        )}
-        {user?.role !== 'user' && activeView !== 'user' && (
-          <button onClick={() => setView('user')} className="text-xs sm:text-sm font-medium text-zinc-600 hover:text-zinc-900 bg-zinc-100 px-2 py-1 rounded-lg">User View</button>
+        {user && (
+          <div className="flex items-center gap-2 px-3 py-1 bg-zinc-100 rounded-full">
+            <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
+            <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-600">
+              {user.role === 'owner' ? 'Owner' : user.role === 'admin' ? 'Admin' : user.role === 'driver' ? 'Driver' : 'User'}
+            </span>
+          </div>
         )}
         {onLogout && (
-          <button onClick={onLogout} className="p-1.5 hover:bg-zinc-100 rounded-full transition-colors">
-            <LogOut className="w-4 h-4 sm:w-5 sm:h-5 text-zinc-600" />
+          <button onClick={onLogout} className="p-1.5 hover:bg-zinc-100 rounded-full transition-colors flex items-center gap-2 group">
+            <span className="hidden sm:inline text-xs font-bold text-zinc-500 group-hover:text-zinc-900">Logout</span>
+            <LogOut className="w-4 h-4 sm:w-5 sm:h-5 text-zinc-600 group-hover:text-zinc-900" />
           </button>
         )}
       </div>
@@ -218,6 +218,7 @@ export default function App() {
 
   const handleLogout = () => {
     setUser(null);
+    setView('user');
     setTrackedRide(null);
     setTrackingId('');
     signOut(auth);
