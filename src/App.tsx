@@ -21,7 +21,8 @@ import {
   BellRing,
   Bell,
   Send,
-  Phone
+  Phone,
+  Lock
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -345,6 +346,7 @@ export default function App() {
   const [adminWithdrawals, setAdminWithdrawals] = useState<any[]>([]);
   const [selectedDriverTransactions, setSelectedDriverTransactions] = useState<{name: string, transactions: any[]} | null>(null);
   const [newAdmin, setNewAdmin] = useState({ username: '', password: '', pin: '', role: 'admin' as 'admin' | 'owner' });
+  const [changeCreds, setChangeCreds] = useState({ password: '', pin: '' });
 
   // Driver Data
   const [availableRides, setAvailableRides] = useState<Ride[]>([]);
@@ -360,6 +362,27 @@ export default function App() {
   const [pickupCoords, setPickupCoords] = useState<{ lat: number, lng: number } | null>(null);
   const [dropoffCoords, setDropoffCoords] = useState<{ lat: number, lng: number } | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  useEffect(() => {
+    const bootstrapOwner = async () => {
+      try {
+        const q = query(collection(db, 'admins'), limit(1));
+        const snapshot = await getDocs(q);
+        if (snapshot.empty) {
+          await addDoc(collection(db, 'admins'), {
+            username: 'Shafiq Choudhary',
+            password: '2003',
+            pin: '2003',
+            role: 'owner',
+            created_at: new Date().toISOString()
+          });
+        }
+      } catch (err) {
+        console.error("Bootstrap error:", err);
+      }
+    };
+    bootstrapOwner();
+  }, []);
 
   useEffect(() => {
     // Preload notification sound
@@ -868,6 +891,21 @@ export default function App() {
   };
 
   const fetchDriverData = () => {};
+
+  const handleChangeAdminCreds = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      await updateDoc(doc(db, 'admins', user.id), {
+        password: changeCreds.password,
+        pin: changeCreds.pin
+      });
+      setUser({ ...user, password: changeCreds.password, pin: changeCreds.pin });
+      setChangeCreds({ password: '', pin: '' });
+      alert('Credentials updated successfully!');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `admins/${user.id}`);
+    }
+  };
 
   const handleAdminLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1906,7 +1944,7 @@ export default function App() {
                               </div>
                               <input
                                 type="password"
-                                placeholder="4-Digit PIN"
+                                placeholder="2nd Step PIN"
                                 maxLength={4}
                                 autoFocus
                                 className="w-full px-4 py-4 bg-zinc-50 border border-zinc-200 rounded-xl text-center text-2xl font-bold tracking-[1em] focus:outline-none focus:ring-2 focus:ring-zinc-900"
@@ -1986,7 +2024,7 @@ export default function App() {
                           <input
                             type="text"
                             maxLength={4}
-                            placeholder="4-Digit PIN"
+                            placeholder="2nd Step PIN"
                             required
                             className="w-24 px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm"
                             value={newAdmin.pin}
@@ -2018,6 +2056,35 @@ export default function App() {
                       </div>
                     </div>
                   )}
+
+                  <div className="bg-white rounded-2xl border border-zinc-200 overflow-hidden">
+                    <div className="p-6 border-b border-zinc-100 flex items-center gap-2">
+                      <Lock className="w-5 h-5 text-zinc-900" />
+                      <h3 className="font-bold text-lg">Security Settings</h3>
+                    </div>
+                    <div className="p-6">
+                      <form onSubmit={handleChangeAdminCreds} className="flex flex-col sm:flex-row gap-2">
+                        <input
+                          type="password"
+                          placeholder="New Password"
+                          required
+                          className="flex-1 px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm"
+                          value={changeCreds.password}
+                          onChange={e => setChangeCreds({ ...changeCreds, password: e.target.value })}
+                        />
+                        <input
+                          type="text"
+                          maxLength={4}
+                          placeholder="New 2nd Step PIN"
+                          required
+                          className="w-32 px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm"
+                          value={changeCreds.pin}
+                          onChange={e => setChangeCreds({ ...changeCreds, pin: e.target.value.replace(/\D/g, '').slice(0, 4) })}
+                        />
+                        <button className="bg-zinc-900 text-white px-4 py-2 rounded-lg text-sm font-bold">Update Credentials</button>
+                      </form>
+                    </div>
+                  </div>
 
                   <div className="bg-white rounded-2xl border border-zinc-200 overflow-hidden">
                     <div className="p-6 border-b border-zinc-100 flex items-center gap-2">
