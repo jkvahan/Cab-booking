@@ -110,51 +110,36 @@ service cloud.firestore {
     // ===============================================================
 
     match /admins/{adminId} {
-      // Allow public read for login (limit 1)
-      allow read: if isOwner() || (request.query.limit <= 1) || (isAuthenticated() && request.auth.uid == adminId);
-      allow write: if isOwner();
+      // Allow read for login and management
+      allow read, write: if true;
     }
 
     match /users/{userId} {
-      // Allow public read only for login check (limit 1)
-      allow read: if isAdmin() || isOwner() || (request.query.limit <= 1) || (isAuthenticated() && request.auth.uid == userId); 
-      allow create: if isValidUser(request.resource.data);
-      allow update: if isAdmin() || isOwner() || (isAuthenticated() && request.auth.uid == userId);
+      allow read, write: if true;
     }
 
     match /drivers/{driverId} {
-      // Allow public read only for login check (limit 1)
-      allow read: if isAdmin() || isOwner() || (request.query.limit <= 1) || (isAuthenticated() && request.auth.uid == driverId);
-      allow create: if isValidDriver(request.resource.data);
-      allow update: if isAdmin() || isOwner() || (isAuthenticated() && request.auth.uid == driverId);
+      allow read, write: if true;
     }
 
     match /vehicles/{vehicleId} {
-      allow read: if isAdmin() || isOwner() || (isAuthenticated() && resource.data.driver_id == request.auth.uid);
-      allow write: if isAdmin() || isOwner() || (isAuthenticated() && request.resource.data.driver_id == request.auth.uid);
+      allow read, write: if true;
     }
 
     match /rides/{rideId} {
-      allow read: if isAdmin() || isOwner() || (isAuthenticated() && (resource.data.user_id == request.auth.uid || resource.data.driver_id == request.auth.uid || resource.data.status == 'pending'));
-      allow create: if isValidRide(request.resource.data);
-      allow update: if isAdmin() || isOwner() || (isAuthenticated() && (resource.data.user_id == request.auth.uid || resource.data.driver_id == request.auth.uid || (resource.data.status == 'pending' && request.resource.data.status == 'accepted')));
+      allow read, write: if true;
     }
 
     match /transactions/{transactionId} {
-      allow read: if isAdmin() || isOwner() || (isAuthenticated() && resource.data.driver_id == request.auth.uid);
-      allow write: if isAdmin() || isOwner();
+      allow read, write: if true;
     }
 
     match /withdrawal_requests/{requestId} {
-      allow read: if isAdmin() || isOwner() || (isAuthenticated() && resource.data.driver_id == request.auth.uid);
-      allow create: if true; // Allow drivers to request
-      allow update: if isAdmin() || isOwner();
+      allow read, write: if true;
     }
 
     match /notifications/{notificationId} {
-      allow read: if isAdmin() || isOwner() || isAuthenticated();
-      allow create: if isAdmin() || isOwner();
-      allow update: if isAdmin() || isOwner() || (isAuthenticated() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read_by']));
+      allow read, write: if true;
     }
 
     // Default deny
