@@ -1276,19 +1276,21 @@ export default function App() {
           completed_at: new Date().toISOString()
         });
 
-        // Update driver wallet (Deduct fare as commission/service fee)
+        // Update driver wallet (Deduct 10% fare as commission)
         const driverRef = doc(db, 'drivers', user.id);
         const driverSnap = await getDoc(driverRef);
         if (driverSnap.exists()) {
-          const newBalance = (driverSnap.data().wallet_balance || 0) - (rideData.fare || 0);
+          const fare = rideData.fare || 0;
+          const commission = fare * 0.1;
+          const newBalance = (driverSnap.data().wallet_balance || 0) - commission;
           await updateDoc(driverRef, { wallet_balance: newBalance });
           
           // Add transaction
           await addDoc(collection(db, 'transactions'), {
             driver_id: user.id,
-            amount: rideData.fare,
+            amount: commission,
             type: 'debit',
-            description: `Ride completed: ${rideId} (Fare Deducted)`,
+            description: `Ride completed: ${rideId} (10% Commission Deducted)`,
             created_at: new Date().toISOString()
           });
         }
