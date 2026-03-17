@@ -442,6 +442,8 @@ export default function App() {
     let unsubscribeVehicles: () => void;
     let unsubscribeAllRides: () => void;
     let unsubscribeNotifications: () => void;
+    let unsubscribeDriverData: () => void;
+    let unsubscribeDriverTransactions: () => void;
 
     // Notification Listener for all views
     let notifQuery;
@@ -509,9 +511,13 @@ export default function App() {
     }
 
     if (view === 'driver') {
+      const tenDaysAgo = new Date();
+      tenDaysAgo.setDate(tenDaysAgo.getDate() - 10);
+      const tenDaysAgoStr = tenDaysAgo.toISOString();
+
       const q = query(
         collection(db, 'rides'),
-        where('status', 'in', ['pending', 'accepted', 'ongoing']),
+        where('created_at', '>=', tenDaysAgoStr),
         orderBy('created_at', 'desc')
       );
       unsubscribeAvailable = onSnapshot(q, (snapshot) => {
@@ -533,6 +539,25 @@ export default function App() {
 
         setAvailableRides(rides);
       }, (err) => handleFirestoreError(err, OperationType.LIST, 'rides'));
+
+      // Driver Wallet & Transactions Listener
+      unsubscribeDriverData = onSnapshot(doc(db, 'drivers', user.id), (docSnap) => {
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          setDriverWallet(prev => ({ ...prev, balance: data.wallet_balance || 0 }));
+        }
+      }, (err) => handleFirestoreError(err, OperationType.GET, `drivers/${user.id}`));
+
+      const txQuery = query(
+        collection(db, 'transactions'),
+        where('driver_id', '==', user.id),
+        orderBy('created_at', 'desc'),
+        limit(50)
+      );
+      unsubscribeDriverTransactions = onSnapshot(txQuery, (snapshot) => {
+        const txs = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id }));
+        setDriverWallet(prev => ({ ...prev, transactions: txs }));
+      }, (err) => handleFirestoreError(err, OperationType.LIST, 'transactions'));
     }
 
     if (view === 'admin') {
@@ -565,6 +590,8 @@ export default function App() {
       unsubscribeVehicles?.();
       unsubscribeAllRides?.();
       unsubscribeNotifications?.();
+      unsubscribeDriverData?.();
+      unsubscribeDriverTransactions?.();
     };
   }, [view, user, isAuthReady]);
 
@@ -741,7 +768,7 @@ export default function App() {
           driver_id: driverId,
           amount,
           type,
-          reason,
+          description: reason,
           created_at: new Date().toISOString()
         });
         setToast({ message: `Wallet ${type === 'credit' ? 'credited' : 'debited'} successfully`, type: 'success' });
@@ -781,7 +808,7 @@ export default function App() {
               driver_id: withdrawalData.driver_id,
               amount: withdrawalData.amount,
               type: 'debit',
-              reason: `Withdrawal approved: ${id}`,
+              description: `Withdrawal approved: ${id}`,
               created_at: new Date().toISOString()
             });
           }
@@ -1178,19 +1205,19 @@ export default function App() {
           completed_at: new Date().toISOString()
         });
 
-        // Update driver wallet
+        // Update driver wallet (Deduct fare as commission/service fee)
         const driverRef = doc(db, 'drivers', user.id);
         const driverSnap = await getDoc(driverRef);
         if (driverSnap.exists()) {
-          const newBalance = (driverSnap.data().wallet_balance || 0) + (rideData.fare || 0);
+          const newBalance = (driverSnap.data().wallet_balance || 0) - (rideData.fare || 0);
           await updateDoc(driverRef, { wallet_balance: newBalance });
           
           // Add transaction
           await addDoc(collection(db, 'transactions'), {
             driver_id: user.id,
             amount: rideData.fare,
-            type: 'credit',
-            reason: `Ride completed: ${rideId}`,
+            type: 'debit',
+            description: `Ride completed: ${rideId} (Fare Deducted)`,
             created_at: new Date().toISOString()
           });
         }
@@ -1230,7 +1257,7 @@ export default function App() {
           driver_id: user.id,
           amount: 50,
           type: 'debit',
-          reason: `Fine for cancelling accepted ride: ${rideId}`,
+          description: `Fine for cancelling accepted ride: ${rideId}`,
           created_at: new Date().toISOString()
         });
       }
