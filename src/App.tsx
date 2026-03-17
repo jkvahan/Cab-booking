@@ -870,10 +870,20 @@ export default function App() {
   };
 
   const handleRequestWithdrawal = async () => {
-    const amountStr = prompt('Enter amount to withdraw:');
+    if (driverWallet.balance <= 0) {
+      alert('You have ₹0 balance. You cannot request a withdrawal.');
+      return;
+    }
+
+    const amountStr = prompt(`Enter amount to withdraw (Available: ₹${driverWallet.balance}):`);
     if (!amountStr) return;
     const amount = parseFloat(amountStr);
     if (isNaN(amount) || amount <= 0) return alert('Invalid amount');
+
+    if (amount > driverWallet.balance) {
+      alert(`Insufficient balance! You only have ₹${driverWallet.balance}`);
+      return;
+    }
 
     const bankDetails = prompt('Enter Bank Details (Account No, IFSC, etc.):');
     if (!bankDetails) return alert('Bank details are required');
