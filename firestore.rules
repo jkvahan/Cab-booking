@@ -26,6 +26,9 @@ service cloud.firestore {
     // Collection: withdrawal_requests
     // Fields: driver_id, amount, bank_details, status, created_at
     //
+    // Collection: notifications
+    // Fields: message, target, driver_id, created_at, read_by
+    //
     // ===============================================================
 
     // ===============================================================
@@ -87,6 +90,14 @@ service cloud.firestore {
              data.role in ['admin', 'owner'];
     }
 
+    function isValidNotification(data) {
+      return data.message is string && data.message.size() > 0 && data.message.size() < 1000 &&
+             data.target in ['all_drivers', 'all_users', 'specific_driver'] &&
+             (!('driver_id' in data) || data.driver_id is string) &&
+             data.created_at is string &&
+             data.read_by is list;
+    }
+
     // ===============================================================
     // Rules
     // ===============================================================
@@ -127,6 +138,22 @@ service cloud.firestore {
       allow read: if isAdmin() || (isAuthenticated() && resource.data.driver_id == request.auth.uid);
       allow create: if isAuthenticated() && request.resource.data.driver_id == request.auth.uid;
       allow update: if isAdmin();
+    }
+
+    match /notifications/{notificationId} {
+      allow read: if isAdmin() || 
+                    (isAuthenticated() && (
+                      resource.data.target == 'all_users' || 
+                      resource.data.target == 'all_drivers' || 
+                      (resource.data.target == 'specific_driver' && resource.data.driver_id == request.auth.uid)
+                    ));
+      allow create: if isAdmin() && isValidNotification(request.resource.data);
+      allow update: if isAdmin() || 
+                      (isAuthenticated() && 
+                       request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read_by']) &&
+                       request.resource.data.read_by.hasAll(resource.data.read_by) &&
+                       request.resource.data.read_by.size() == resource.data.read_by.size() + 1 &&
+                       request.auth.uid in request.resource.data.read_by);
     }
 
     // Default deny

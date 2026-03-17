@@ -106,6 +106,19 @@
         "created_at": { "type": "string", "format": "date-time" }
       },
       "required": ["driver_id", "amount", "status"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "Admin notification for users or drivers",
+      "type": "object",
+      "properties": {
+        "message": { "type": "string" },
+        "target": { "type": "string", "enum": ["all_drivers", "all_users", "specific_driver"] },
+        "driver_id": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "read_by": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["message", "target", "created_at"]
     }
   },
   "firestore": {
@@ -115,6 +128,7 @@
     "vehicles": { "schema": "Vehicle", "description": "Vehicle details" },
     "rides": { "schema": "Ride", "description": "Ride bookings" },
     "transactions": { "schema": "Transaction", "description": "Wallet transactions" },
-    "withdrawal_requests": { "schema": "WithdrawalRequest", "description": "Withdrawal requests" }
+    "withdrawal_requests": { "schema": "WithdrawalRequest", "description": "Withdrawal requests" },
+    "notifications": { "schema": "Notification", "description": "Admin notifications" }
   }
 }

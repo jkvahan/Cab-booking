@@ -19,6 +19,8 @@ import {
   KeyRound,
   History as HistoryIcon,
   BellRing,
+  Bell,
+  Send,
   Phone
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -37,7 +39,8 @@ import {
   addDoc, 
   serverTimestamp,
   getDocFromServer,
-  limit
+  limit,
+  arrayUnion
 } from 'firebase/firestore';
 import { 
   signInWithPopup, 
@@ -130,6 +133,15 @@ interface Ride {
   distance?: number;
   pickup_date?: string;
   pickup_time?: string;
+}
+
+interface Notification {
+  id: string;
+  message: string;
+  target: 'all_drivers' | 'all_users' | 'specific_driver';
+  driver_id?: string;
+  created_at: string;
+  read_by: string[]; // List of user IDs who dismissed it
 }
 
 // --- Components ---
@@ -318,6 +330,14 @@ export default function App() {
   const [adminPin, setAdminPin] = useState('');
   const [finalAmountInput, setFinalAmountInput] = useState('');
   const [adminRides, setAdminRides] = useState<Ride[]>([]);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [activeNotification, setActiveNotification] = useState<Notification | null>(null);
+  const [newNotification, setNewNotification] = useState({
+    message: '',
+    target: 'all_drivers' as Notification['target'],
+    driver_id: ''
+  });
+  const [isSendingNotification, setIsSendingNotification] = useState(false);
   const [adminDrivers, setAdminDrivers] = useState<any[]>([]);
   const [adminUsers, setAdminUsers] = useState<any[]>([]);
   const [adminVehicles, setAdminVehicles] = useState<any[]>([]);
@@ -396,48 +416,6 @@ export default function App() {
   }, []);
 
   // WebSocket Connection
-  useEffect(() => {
-    if (!user) return;
-    
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const socket = new WebSocket(`${protocol}//${window.location.host}?userId=${user.id}`);
-    
-    socket.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      if (data.type === 'NEW_RIDE') {
-        if (view === 'driver') {
-          setAvailableRides(prev => {
-            // Avoid duplicates
-            if (prev.some(r => r.id === data.ride.id)) return prev;
-            return [data.ride, ...prev];
-          });
-          // Play sound
-          if (isAudioUnlocked && audioRef.current) {
-            audioRef.current.play().catch(e => console.log('Audio play failed:', e));
-            // Stop after 60 seconds (1 minute) if not accepted
-            setTimeout(stopRing, 60000);
-          }
-          setToast({ message: "New Ride Request Available!", type: 'success' });
-        }
-        if (view === 'admin') {
-          setAdminRides(prev => [data.ride, ...prev]);
-        }
-      } else if (data.type === 'RIDE_UPDATED') {
-        if (view === 'driver') {
-          setAvailableRides(prev => prev.map(r => r.id === data.ride.id ? data.ride : r));
-        }
-        if (view === 'admin') {
-          setAdminRides(prev => prev.map(r => r.id === data.ride.id ? data.ride : r));
-        }
-        if (view === 'user' && trackedRide?.id === data.ride.id) {
-          setTrackedRide(data.ride);
-        }
-      }
-    };
-
-    return () => socket.close();
-  }, [user, view, trackedRide]);
-
   const unlockAudio = () => {
     if (audioRef.current) {
       audioRef.current.play().then(() => {
@@ -463,6 +441,54 @@ export default function App() {
     let unsubscribeDrivers: () => void;
     let unsubscribeVehicles: () => void;
     let unsubscribeAllRides: () => void;
+    let unsubscribeNotifications: () => void;
+
+    // Notification Listener for all views
+    let notifQuery;
+    if (view === 'admin') {
+      notifQuery = query(
+        collection(db, 'notifications'),
+        orderBy('created_at', 'desc'),
+        limit(20)
+      );
+    } else if (view === 'driver') {
+      notifQuery = query(
+        collection(db, 'notifications'),
+        where('target', 'in', ['all_drivers', 'specific_driver']),
+        orderBy('created_at', 'desc'),
+        limit(10)
+      );
+    } else {
+      notifQuery = query(
+        collection(db, 'notifications'),
+        where('target', '==', 'all_users'),
+        orderBy('created_at', 'desc'),
+        limit(10)
+      );
+    }
+
+    unsubscribeNotifications = onSnapshot(notifQuery, (snapshot) => {
+      const notifs = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Notification));
+      setNotifications(notifs);
+      
+      // Find latest unread notification for current user
+      const latest = notifs.find(n => {
+        const isRead = n.read_by?.includes(user.id);
+        if (isRead) return false;
+
+        // Extra client-side check for specific driver
+        if (n.target === 'specific_driver' && n.driver_id !== user.id) return false;
+        
+        return true;
+      });
+
+      if (latest) {
+        setActiveNotification(latest);
+      }
+    }, (err) => {
+      // If query fails (e.g. specific_driver query needs index or permission issue)
+      console.error("Notification query error:", err);
+    });
 
     if (view === 'user') {
       const q = query(
@@ -473,6 +499,12 @@ export default function App() {
       unsubscribeRides = onSnapshot(q, (snapshot) => {
         const rides = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Ride));
         setMyRides(rides);
+        
+        // Update tracked ride if it's in the snapshot
+        if (trackedRide) {
+          const updated = rides.find(r => r.id === trackedRide.id);
+          if (updated) setTrackedRide(updated);
+        }
       }, (err) => handleFirestoreError(err, OperationType.LIST, 'rides'));
     }
 
@@ -484,6 +516,21 @@ export default function App() {
       );
       unsubscribeAvailable = onSnapshot(q, (snapshot) => {
         const rides = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Ride));
+        
+        // Check for new pending rides to play sound
+        snapshot.docChanges().forEach((change) => {
+          if (change.type === "added") {
+            const newRide = change.doc.data() as Ride;
+            if (newRide.status === 'pending') {
+              if (isAudioUnlocked && audioRef.current) {
+                audioRef.current.play().catch(e => console.log('Audio play failed:', e));
+                setTimeout(stopRing, 60000);
+              }
+              setToast({ message: "New Ride Request Available!", type: 'success' });
+            }
+          }
+        });
+
         setAvailableRides(rides);
       }, (err) => handleFirestoreError(err, OperationType.LIST, 'rides'));
     }
@@ -517,6 +564,7 @@ export default function App() {
       unsubscribeDrivers?.();
       unsubscribeVehicles?.();
       unsubscribeAllRides?.();
+      unsubscribeNotifications?.();
     };
   }, [view, user, isAuthReady]);
 
@@ -578,12 +626,16 @@ export default function App() {
 
   const handleAddAdmin = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (newAdmin.role === 'owner') {
+      alert("Cannot create another owner!");
+      return;
+    }
     try {
       await addDoc(collection(db, 'admins'), {
         username: newAdmin.username,
         password: newAdmin.password,
         pin: newAdmin.pin,
-        role: newAdmin.role,
+        role: 'admin', // Force admin role
         created_at: new Date().toISOString()
       });
       setNewAdmin({ username: '', password: '', pin: '', role: 'admin' });
@@ -597,11 +649,55 @@ export default function App() {
       alert("You cannot remove yourself!");
       return;
     }
+    
+    // Check if the admin to be removed is an owner
+    try {
+      const adminDoc = await getDoc(doc(db, 'admins', id));
+      if (adminDoc.exists() && adminDoc.data().role === 'owner') {
+        alert("Cannot remove the owner!");
+        return;
+      }
+    } catch (e) {
+      console.error("Error checking admin role:", e);
+    }
+
     if (!confirm("Are you sure you want to remove this admin?")) return;
     try {
       await deleteDoc(doc(db, 'admins', id));
     } catch (err) {
       handleFirestoreError(err, OperationType.DELETE, `admins/${id}`);
+    }
+  };
+
+  const handleSendNotification = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newNotification.message) return;
+    setIsSendingNotification(true);
+    try {
+      await addDoc(collection(db, 'notifications'), {
+        ...newNotification,
+        created_at: new Date().toISOString(),
+        read_by: []
+      });
+      setNewNotification({ message: '', target: 'all_drivers', driver_id: '' });
+      setToast({ message: 'Notification sent successfully!', type: 'success' });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.CREATE, 'notifications');
+    } finally {
+      setIsSendingNotification(false);
+    }
+  };
+
+  const dismissNotification = async (notificationId: string) => {
+    if (!user) return;
+    try {
+      const notifRef = doc(db, 'notifications', notificationId);
+      await updateDoc(notifRef, {
+        read_by: arrayUnion(user.id)
+      });
+      setActiveNotification(null);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `notifications/${notificationId}`);
     }
   };
 
@@ -1861,6 +1957,68 @@ export default function App() {
                   </div>
 
                   <div className="bg-white rounded-2xl border border-zinc-200 overflow-hidden">
+                    <div className="p-6 border-b border-zinc-100 flex items-center gap-2">
+                      <Bell className="w-5 h-5 text-zinc-900" />
+                      <h3 className="font-bold text-lg">Send Notification</h3>
+                    </div>
+                    <div className="p-6 space-y-4">
+                      <form onSubmit={handleSendNotification} className="space-y-4">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          <div className="space-y-1">
+                            <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Target Audience</label>
+                            <select 
+                              className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-zinc-900"
+                              value={newNotification.target}
+                              onChange={e => setNewNotification({ ...newNotification, target: e.target.value as Notification['target'] })}
+                            >
+                              <option value="all_drivers">All Drivers</option>
+                              <option value="all_users">All Customers</option>
+                              <option value="specific_driver">Specific Driver</option>
+                            </select>
+                          </div>
+                          {newNotification.target === 'specific_driver' && (
+                            <div className="space-y-1">
+                              <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Select Driver</label>
+                              <select 
+                                className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-zinc-900"
+                                value={newNotification.driver_id}
+                                onChange={e => setNewNotification({ ...newNotification, driver_id: e.target.value })}
+                                required
+                              >
+                                <option value="">Select a driver...</option>
+                                {adminDrivers.map(d => (
+                                  <option key={d.id} value={d.id}>{d.name} ({d.phone})</option>
+                                ))}
+                              </select>
+                            </div>
+                          )}
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Message</label>
+                          <textarea
+                            placeholder="Write your notification message here..."
+                            className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zinc-900 min-h-[100px]"
+                            value={newNotification.message}
+                            onChange={e => setNewNotification({ ...newNotification, message: e.target.value })}
+                            required
+                          />
+                        </div>
+                        <button 
+                          disabled={isSendingNotification}
+                          className="w-full bg-zinc-900 text-white py-3 rounded-xl font-bold hover:bg-zinc-800 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                        >
+                          {isSendingNotification ? (
+                            <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                          ) : (
+                            <Send className="w-4 h-4" />
+                          )}
+                          Send Notification
+                        </button>
+                      </form>
+                    </div>
+                  </div>
+
+                  <div className="bg-white rounded-2xl border border-zinc-200 overflow-hidden">
                     <div className="p-6 border-b border-zinc-100 flex justify-between items-center">
                       <h3 className="font-bold text-lg">Withdrawal Requests</h3>
                       <span className="bg-zinc-100 text-zinc-600 text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider">
@@ -2521,6 +2679,42 @@ export default function App() {
           )}
         </AnimatePresence>
       </main>
+
+      {/* Notification Modal */}
+      <AnimatePresence>
+        {activeNotification && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 20 }}
+              className="bg-white w-full max-w-md rounded-3xl overflow-hidden shadow-2xl border border-zinc-200"
+            >
+              <div className="p-8 text-center space-y-6">
+                <div className="w-20 h-20 bg-zinc-900 rounded-full flex items-center justify-center mx-auto shadow-lg shadow-zinc-200">
+                  <Bell className="w-10 h-10 text-white" />
+                </div>
+                
+                <div className="space-y-2">
+                  <p className="text-xs font-bold text-zinc-400 uppercase tracking-[0.2em]">New Notification</p>
+                  <h3 className="text-2xl font-bold text-zinc-900 leading-tight">Admin Message</h3>
+                </div>
+
+                <div className="p-6 bg-zinc-50 rounded-2xl border border-zinc-100 italic text-zinc-700 leading-relaxed">
+                  "{activeNotification.message}"
+                </div>
+
+                <button
+                  onClick={() => dismissNotification(activeNotification.id)}
+                  className="w-full bg-zinc-900 text-white py-4 rounded-2xl font-bold hover:bg-zinc-800 transition-all shadow-lg shadow-zinc-200 active:scale-[0.98]"
+                >
+                  Got it, thanks!
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
