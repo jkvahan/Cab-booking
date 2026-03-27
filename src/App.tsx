@@ -56,6 +56,7 @@ import { db, auth } from './firebase';
 import { estimateFare } from './services/geminiService';
 import { calculateRealFare, VEHICLE_RATES } from './services/mapsService';
 import MapComponent from './components/Map';
+import { io } from "socket.io-client";
 
 // --- Types ---
 enum OperationType {
@@ -85,6 +86,54 @@ interface FirestoreErrorInfo {
     }[];
   }
 }
+
+async function triggerPushNotification(title: string, body: string) {
+  if (!("Notification" in window)) return;
+  
+  const showNotification = () => {
+    const notification = new Notification(title, {
+      body,
+      icon: '/favicon.ico'
+    });
+    
+    // Play alarm sound
+    const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
+    audio.play().catch(e => console.error('Audio play failed:', e));
+    
+    notification.onclick = () => {
+      window.focus();
+      notification.close();
+    };
+  };
+
+  if (Notification.permission === "granted") {
+    showNotification();
+  } else if (Notification.permission !== "denied") {
+    Notification.requestPermission().then(permission => {
+      if (permission === "granted") {
+        showNotification();
+      }
+    });
+  }
+}
+
+async function sendNotification(type: string, data: any) {
+  try {
+    await fetch('/api/notify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type, data }),
+    });
+  } catch (error) {
+    console.error('Failed to send notification:', error);
+  }
+}
+
+const socket = io();
+
+socket.on("notification", ({ type, data }) => {
+  triggerPushNotification(`JK Vahan: ${type.replace(/_/g, ' ')}`, data.message);
+});
 
 function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
   const errInfo: FirestoreErrorInfo = {
@@ -152,13 +201,6 @@ const Navbar = ({ activeView, setView, onLogout, user }: { activeView: View, set
   <nav className="fixed top-0 left-0 right-0 glass z-50 m-4 rounded-2xl">
     <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
       <div className="flex items-center gap-3">
-        <motion.div 
-          whileHover={{ rotate: 360 }}
-          transition={{ duration: 0.5 }}
-          className="bg-gradient-to-br from-orange-500 to-rose-600 p-2 rounded-xl shadow-lg"
-        >
-          <Car className="text-white w-5 h-5" />
-        </motion.div>
         <motion.span 
           whileHover={{ scale: 1.05 }}
           className="font-black text-2xl tracking-tighter gradient-text cursor-default"
@@ -716,7 +758,20 @@ export default function App() {
   const handleUserCancelRide = async (rideId: string) => {
     if (!confirm("Are you sure you want to cancel this ride?")) return;
     try {
-      await updateDoc(doc(db, 'rides', rideId), { status: 'cancelled' });
+      const rideRef = doc(db, 'rides', rideId);
+      const rideSnap = await getDoc(rideRef);
+      const rideData = rideSnap.data();
+      
+      await updateDoc(rideRef, { status: 'cancelled' });
+
+      // Send Notifications
+      sendNotification('RIDE_CANCELLED', {
+        userEmail: rideData?.user_email,
+        driverEmail: rideData?.driver_email,
+        adminEmail: 'digitalserviceindia84@gmail.com',
+        message: `Ride ${rideData?.tracking_id} has been cancelled by the user.`,
+        phone: rideData?.user_phone
+      });
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `rides/${rideId}`);
     }
@@ -1181,6 +1236,7 @@ export default function App() {
         user_id: user.id,
         user_name: user.name,
         user_phone: user.phone,
+        user_email: user.email,
         pickup_location: bookingData.pickup,
         dropoff_location: bookingData.dropoff,
         distance: estimatedDistance,
@@ -1194,6 +1250,15 @@ export default function App() {
         created_at: new Date().toISOString()
       };
       const docRef = await addDoc(collection(db, 'rides'), rideData);
+      
+      // Send Notifications
+      sendNotification('NEW_BOOKING', {
+        userEmail: user.email,
+        adminEmail: 'digitalserviceindia84@gmail.com',
+        message: `New ride booked by ${user.name}. Tracking ID: ${rideData.tracking_id}. From: ${rideData.pickup_location} To: ${rideData.dropoff_location}. Fare: ₹${rideData.fare}`,
+        phone: user.phone
+      });
+
       setFareOptions([]);
       setBookingData({ 
         pickup: '', 
@@ -1245,12 +1310,25 @@ export default function App() {
         const endOtp = Math.floor(1000 + Math.random() * 9000).toString();
         await updateDoc(rideRef, {
           driver_id: user.id,
+          driver_name: user.name,
+          driver_phone: user.phone,
           status: 'accepted',
           eta: parseInt(etaInput),
           start_otp: startOtp,
           end_otp: endOtp,
           accepted_at: new Date().toISOString()
         });
+
+        // Send Notifications
+        const rideData = rideSnap.data();
+        sendNotification('RIDE_ACCEPTED', {
+          userEmail: rideData?.user_email,
+          driverEmail: user.email,
+          adminEmail: 'digitalserviceindia84@gmail.com',
+          message: `Ride ${rideData?.tracking_id} accepted by driver ${user.name}. ETA: ${etaInput} mins. Start OTP: ${startOtp}`,
+          phone: rideData?.user_phone
+        });
+
         setAcceptingRideId(null);
         setEtaInput('');
         setToast({ message: "Ride Accepted!", type: 'success' });
@@ -1276,6 +1354,17 @@ export default function App() {
           status: 'ongoing',
           started_at: new Date().toISOString()
         });
+
+        // Send Notifications
+        const rideData = rideSnap.data();
+        sendNotification('RIDE_STARTED', {
+          userEmail: rideData?.user_email,
+          driverEmail: user?.email,
+          adminEmail: 'digitalserviceindia84@gmail.com',
+          message: `Ride ${rideData?.tracking_id} has started. Driver ${user?.name} is on the way to destination.`,
+          phone: rideData?.user_phone
+        });
+
         setOtpInput('');
         setToast({ message: 'Ride started successfully!', type: 'success' });
       } else {
@@ -1303,6 +1392,15 @@ export default function App() {
         await updateDoc(rideRef, {
           status: 'completed',
           completed_at: new Date().toISOString()
+        });
+
+        // Send Notifications
+        sendNotification('RIDE_COMPLETED', {
+          userEmail: rideData?.user_email,
+          driverEmail: user?.email,
+          adminEmail: 'digitalserviceindia84@gmail.com',
+          message: `Ride ${rideData?.tracking_id} completed. Total Fare: ₹${rideData?.fare}. Thank you for riding with JK Vahan!`,
+          phone: rideData?.user_phone
         });
 
         // Update driver wallet (Deduct 10% fare as commission)
@@ -1366,6 +1464,15 @@ export default function App() {
         eta: null,
         start_otp: null,
         end_otp: null
+      });
+
+      // Send Notifications
+      sendNotification('RIDE_DRIVER_CANCELLED', {
+        userEmail: rideData?.user_email,
+        driverEmail: user?.email,
+        adminEmail: 'digitalserviceindia84@gmail.com',
+        message: `Driver ${user?.name} has cancelled the ride ${rideData?.tracking_id}. The ride is now back to pending status.`,
+        phone: rideData?.user_phone
       });
 
       // 2. Fine the driver
@@ -1774,32 +1881,32 @@ export default function App() {
                               animate={{ x: 0, opacity: 1 }}
                               transition={{ delay: idx * 0.1 }}
                               onClick={() => setSelectedOption(option)}
-                              className={`flex items-center justify-between p-5 rounded-3xl border-2 transition-all relative overflow-hidden group ${
+                              className={`flex items-center justify-between p-3 rounded-2xl border-2 transition-all relative overflow-hidden group ${
                                 selectedOption?.type === option.type 
                                 ? 'border-zinc-900 bg-zinc-900 text-white shadow-2xl -translate-y-1' 
-                                : 'glass p-5 hover:border-zinc-300 hover:-translate-y-1 shadow-sm hover:shadow-md'
+                                : 'glass p-3 hover:border-zinc-300 hover:-translate-y-1 shadow-sm hover:shadow-md'
                               }`}
                             >
                               {selectedOption?.type === option.type && (
                                 <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-white/10 to-transparent rounded-full -mr-16 -mt-16 blur-2xl" />
                               )}
-                              <div className="flex items-center gap-4 relative z-10">
-                                <div className={`p-3 rounded-2xl transition-colors ${selectedOption?.type === option.type ? 'bg-white/20' : 'bg-zinc-100'}`}>
-                                  <Car className={`w-7 h-7 ${selectedOption?.type === option.type ? 'text-white' : 'text-zinc-900'}`} />
+                              <div className="flex items-center gap-2.5 relative z-10">
+                                <div className={`p-1.5 rounded-xl transition-colors ${selectedOption?.type === option.type ? 'bg-white/20' : 'bg-zinc-100'}`}>
+                                  <Car className={`w-5 h-5 ${selectedOption?.type === option.type ? 'text-white' : 'text-zinc-900'}`} />
                                 </div>
                                 <div className="text-left">
-                                  <div className="flex items-center gap-2">
-                                    <p className="font-black text-lg">{option.type}</p>
-                                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-black uppercase tracking-widest ${selectedOption?.type === option.type ? 'bg-white/20 text-white' : 'bg-zinc-200 text-zinc-600'}`}>
+                                  <div className="flex items-center gap-1.5">
+                                    <p className="font-black text-sm">{option.type}</p>
+                                    <span className={`text-[8px] px-1.5 py-0.5 rounded-full font-black uppercase tracking-widest ${selectedOption?.type === option.type ? 'bg-white/20 text-white' : 'bg-zinc-200 text-zinc-600'}`}>
                                       {VEHICLE_RATES[option.type as keyof typeof VEHICLE_RATES]?.description}
                                     </span>
                                   </div>
-                                  <p className={`text-xs font-medium ${selectedOption?.type === option.type ? 'text-zinc-400' : 'text-zinc-500'}`}>Available • 2-5 min away</p>
+                                  <p className={`text-[9px] font-medium ${selectedOption?.type === option.type ? 'text-zinc-400' : 'text-zinc-500'}`}>Available • 2-5 min away</p>
                                 </div>
                               </div>
                               <div className="text-right relative z-10">
-                                <p className="text-2xl font-black">₹{option.fare}</p>
-                                <p className={`text-[10px] font-bold uppercase tracking-widest ${selectedOption?.type === option.type ? 'text-zinc-500' : 'text-zinc-400'}`}>Incl. taxes</p>
+                                <p className="text-lg font-black">₹{option.fare}</p>
+                                <p className={`text-[8px] font-bold uppercase tracking-widest ${selectedOption?.type === option.type ? 'text-zinc-500' : 'text-zinc-400'}`}>Incl. taxes</p>
                               </div>
                             </motion.button>
                           ))}
@@ -2175,7 +2282,7 @@ export default function App() {
                     user?.role === 'admin' || user?.role === 'owner' ? (
                       <div className="space-y-8">
                         <div className="flex items-center justify-between mb-8">
-                          <h1 className="text-4xl font-black tracking-tighter gradient-text">Admin Command Center</h1>
+                          <h1 className="text-2xl sm:text-3xl font-black tracking-tighter gradient-text">Admin Command Center</h1>
                           <div className="flex items-center gap-2 px-4 py-2 glass rounded-2xl">
                             <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
                             <span className="text-xs font-black uppercase tracking-widest">System Live</span>
