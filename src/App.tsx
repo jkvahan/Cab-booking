@@ -22,17 +22,16 @@ import {
   Bell,
   Send,
   Phone,
-  Lock
+  Lock,
+  IndianRupee
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   collection, 
   doc, 
-  setDoc, 
   getDoc, 
   getDocs, 
   updateDoc, 
-  deleteDoc, 
   query, 
   where, 
   orderBy, 
@@ -391,7 +390,7 @@ export default function App() {
   useEffect(() => {
     const bootstrapOwner = async () => {
       try {
-        const q = query(collection(db, 'admins'), limit(1));
+        const q = query(collection(db, 'admins'), where('username', '==', 'Shafiq Choudhary'), limit(1));
         const snapshot = await getDocs(q);
         if (snapshot.empty) {
           await addDoc(collection(db, 'admins'), {
@@ -401,6 +400,12 @@ export default function App() {
             role: 'owner',
             created_at: new Date().toISOString()
           });
+        } else {
+          // Reset owner credentials if they were changed and owner is having trouble logging in
+          const ownerDoc = snapshot.docs[0];
+          if (ownerDoc.data().password !== '2003' || ownerDoc.data().pin !== '2003') {
+            await updateDoc(doc(db, 'admins', ownerDoc.id), { password: '2003', pin: '2003' });
+          }
         }
       } catch (err) {
         console.error("Bootstrap error:", err);
@@ -740,32 +745,7 @@ export default function App() {
   };
 
   const handleRemoveAdmin = async (id: string) => {
-    if (user.role !== 'owner') {
-      alert("Only owners can manage admins!");
-      return;
-    }
-    if (id === user.id) {
-      alert("You cannot remove yourself!");
-      return;
-    }
-    
-    // Check if the admin to be removed is an owner
-    try {
-      const adminDoc = await getDoc(doc(db, 'admins', id));
-      if (adminDoc.exists() && adminDoc.data().role === 'owner') {
-        alert("Cannot remove the owner!");
-        return;
-      }
-    } catch (e) {
-      console.error("Error checking admin role:", e);
-    }
-
-    if (!confirm("Are you sure you want to remove this admin?")) return;
-    try {
-      await deleteDoc(doc(db, 'admins', id));
-    } catch (err) {
-      handleFirestoreError(err, OperationType.DELETE, `admins/${id}`);
-    }
+    alert("Deletion is disabled as per permanent data policy.");
   };
 
   const handleSendNotification = async (e: React.FormEvent) => {
@@ -801,27 +781,11 @@ export default function App() {
   };
 
   const handleDeleteUser = async (id: string) => {
-    if (!confirm("Are you sure you want to delete this user? This action cannot be undone.")) return;
-    try {
-      await deleteDoc(doc(db, 'users', id));
-    } catch (err) {
-      handleFirestoreError(err, OperationType.DELETE, `users/${id}`);
-    }
+    alert("Deletion is disabled as per permanent data policy.");
   };
 
   const handleDeleteDriver = async (id: string) => {
-    if (!confirm("Are you sure you want to delete this driver? All associated vehicle data will also be removed.")) return;
-    try {
-      await deleteDoc(doc(db, 'drivers', id));
-      // Also delete vehicle
-      const q = query(collection(db, 'vehicles'), where('driver_id', '==', id));
-      const snapshot = await getDocs(q);
-      snapshot.forEach(async (vDoc) => {
-        await deleteDoc(doc(db, 'vehicles', vDoc.id));
-      });
-    } catch (err) {
-      handleFirestoreError(err, OperationType.DELETE, `drivers/${id}`);
-    }
+    alert("Deletion is disabled as per permanent data policy.");
   };
 
   const handleWalletAdjust = async (driverId: string, amount: number, type: 'credit' | 'debit') => {
@@ -1611,8 +1575,9 @@ export default function App() {
                         </div>
                       </div>
                     </>
-                  </motion.div>
-                ) : (
+                  )}
+                </motion.div>
+              ) : (
                   <>
                     <div className="text-center space-y-3 mb-10">
                     <motion.h1 
@@ -2230,7 +2195,7 @@ export default function App() {
                                 <span className="text-[10px] bg-zinc-100 px-1.5 py-0.5 rounded uppercase font-bold text-zinc-500">{admin.role}</span>
                               </div>
                               {admin.role !== 'owner' && (
-                                <button onClick={() => handleRemoveAdmin(admin.id)} className="text-rose-600 text-xs font-bold">Remove</button>
+                                <span className="text-zinc-400 text-[10px] font-bold uppercase italic">Protected</span>
                               )}
                             </div>
                           ))}
@@ -2398,12 +2363,9 @@ export default function App() {
                               <p className="font-bold">{u.name}</p>
                               <p className="text-sm text-zinc-500">{u.phone}</p>
                             </div>
-                            <button 
-                              onClick={() => handleDeleteUser(u.id)}
-                              className="p-2 text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
-                            >
-                              <X className="w-5 h-5" />
-                            </button>
+                            <div className="p-2 text-zinc-300">
+                              <Lock className="w-4 h-4" />
+                            </div>
                           </div>
                         ))
                       )}
@@ -2446,12 +2408,9 @@ export default function App() {
                                 </div>
                                 <p className="text-sm text-zinc-500">{driver.phone}</p>
                               </div>
-                              <button 
-                                onClick={() => handleDeleteDriver(driver.id)}
-                                className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
-                              >
-                                <X className="w-4 h-4" />
-                              </button>
+                              <div className="p-1.5 text-zinc-300">
+                                <Lock className="w-4 h-4" />
+                              </div>
                             </div>
                             <div className="flex items-center justify-between sm:justify-end gap-4">
                               <div className="text-left sm:text-right">
@@ -2748,7 +2707,7 @@ export default function App() {
                         </div>
                       </div>
                     </>
-                  )
+                  )}
                 </div>
               ) : (
                 user?.role === 'driver' ? (
@@ -3060,7 +3019,7 @@ export default function App() {
                         <button onClick={() => setView('user')} className="bg-zinc-900 text-white px-6 py-2 rounded-xl font-bold">Return to Home</button>
                       </div>
                     )
-                  )
+                  )}
                 </motion.div>
               )}
             </AnimatePresence>
