@@ -159,7 +159,12 @@ const Navbar = ({ activeView, setView, onLogout, user }: { activeView: View, set
         >
           <Car className="text-white w-5 h-5" />
         </motion.div>
-        <span className="font-black text-2xl tracking-tighter gradient-text">CabGo</span>
+        <motion.span 
+          whileHover={{ scale: 1.05 }}
+          className="font-black text-2xl tracking-tighter gradient-text cursor-default"
+        >
+          JK Vahan
+        </motion.span>
       </div>
       <div className="flex items-center gap-4">
         {user && (
@@ -1431,6 +1436,13 @@ export default function App() {
 
       {user && <Navbar activeView={view} setView={changeView} onLogout={user ? handleLogout : undefined} user={user} />}
 
+      {/* Background Blobs */}
+      <div className="fixed inset-0 -z-10 overflow-hidden pointer-events-none">
+        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-orange-500/10 rounded-full blur-[120px] animate-pulse" />
+        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-indigo-500/10 rounded-full blur-[120px] animate-pulse" style={{ animationDelay: '2s' }} />
+        <div className="absolute top-[30%] right-[10%] w-[30%] h-[30%] bg-rose-500/10 rounded-full blur-[120px] animate-pulse" style={{ animationDelay: '4s' }} />
+      </div>
+
       <main className={`${user ? 'pt-20' : 'pt-8'} pb-12 px-3 sm:px-4 max-w-4xl mx-auto`}>
         <AnimatePresence mode="wait">
           {/* USER VIEW */}
@@ -1457,12 +1469,12 @@ export default function App() {
                   >
                     <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-orange-500/10 to-rose-500/10 rounded-full -mr-16 -mt-16 blur-2xl" />
                     
-                    <h2 className="text-3xl font-black mb-8 flex items-center gap-3">
-                      <div className="p-2 bg-zinc-900 rounded-xl shadow-lg">
+                    <h2 className="text-xl sm:text-2xl font-black mb-8 flex items-center gap-3">
+                      <div className="p-2 bg-zinc-900 rounded-xl shadow-lg shrink-0">
                         {forgotPasswordMode ? <KeyRound className="text-white w-6 h-6" /> : <User className="text-white w-6 h-6" />} 
                       </div>
-                      <span className="gradient-text">
-                        {forgotPasswordMode ? 'Reset' : (userAuthMode === 'login' ? 'Welcome Back' : 'Join CabGo')}
+                      <span className="gradient-text truncate max-w-[200px] sm:max-w-none">
+                        {forgotPasswordMode ? 'Reset' : (userAuthMode === 'login' ? 'Welcome Back' : 'Join JK Vahan')}
                       </span>
                     </h2>
                   {error && (
@@ -1583,7 +1595,7 @@ export default function App() {
                     <motion.h1 
                       initial={{ y: 20, opacity: 0 }}
                       animate={{ y: 0, opacity: 1 }}
-                      className="text-5xl font-black tracking-tighter"
+                      className="text-3xl sm:text-4xl font-black tracking-tighter"
                     >
                       Hello, <span className="gradient-text">{user.name.split(' ')[0]}!</span>
                     </motion.h1>
@@ -1597,19 +1609,19 @@ export default function App() {
                   >
                     <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-orange-500 via-rose-500 to-indigo-600" />
                     {/* Trip Type Toggle */}
-                    <div className="flex p-1 bg-zinc-100 rounded-xl">
+                    <div className="flex p-1 bg-zinc-100/50 backdrop-blur-sm rounded-2xl border border-zinc-200/50">
                       <button
                         onClick={() => setBookingData({ ...bookingData, tripType: 'single' })}
-                        className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all ${
-                          bookingData.tripType === 'single' ? 'bg-white shadow-sm text-zinc-900' : 'text-zinc-500'
+                        className={`flex-1 py-3 text-sm font-black rounded-xl transition-all ${
+                          bookingData.tripType === 'single' ? 'bg-zinc-900 shadow-xl text-white scale-105' : 'text-zinc-500 hover:text-zinc-900'
                         }`}
                       >
                         Single Trip
                       </button>
                       <button
                         onClick={() => setBookingData({ ...bookingData, tripType: 'round' })}
-                        className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all ${
-                          bookingData.tripType === 'round' ? 'bg-white shadow-sm text-zinc-900' : 'text-zinc-500'
+                        className={`flex-1 py-3 text-sm font-black rounded-xl transition-all ${
+                          bookingData.tripType === 'round' ? 'bg-zinc-900 shadow-xl text-white scale-105' : 'text-zinc-500 hover:text-zinc-900'
                         }`}
                       >
                         Round Trip
@@ -1621,9 +1633,15 @@ export default function App() {
                         <MapComponent pickup={pickupCoords} dropoff={dropoffCoords} />
                       </div>
                       
-                      <div className="relative group">
+                      <motion.div 
+                        initial={{ x: -20, opacity: 0 }}
+                        animate={{ x: 0, opacity: 1 }}
+                        transition={{ delay: 0.1 }}
+                        className="relative group"
+                      >
                         <MapPin className="absolute left-4 top-4 w-5 h-5 text-emerald-500 group-focus-within:scale-110 transition-transform" />
-                        <input
+                        <motion.input
+                          whileFocus={{ scale: 1.01 }}
                           ref={pickupRef}
                           type="text"
                           placeholder="Pickup Location"
@@ -1643,10 +1661,16 @@ export default function App() {
                         >
                           <Navigation className="w-5 h-5" />
                         </button>
-                      </div>
-                      <div className="relative group">
+                      </motion.div>
+                      <motion.div 
+                        initial={{ x: -20, opacity: 0 }}
+                        animate={{ x: 0, opacity: 1 }}
+                        transition={{ delay: 0.2 }}
+                        className="relative group"
+                      >
                         <Navigation className="absolute left-4 top-4 w-5 h-5 text-rose-500 group-focus-within:scale-110 transition-transform" />
-                        <input
+                        <motion.input
+                          whileFocus={{ scale: 1.01 }}
                           ref={dropoffRef}
                           type="text"
                           placeholder="Dropoff Location"
@@ -1658,11 +1682,17 @@ export default function App() {
                           }}
                           onBlur={() => geocodeLocation(bookingData.dropoff, 'dropoff')}
                         />
-                      </div>
+                      </motion.div>
 
-                      <div className="relative group">
+                      <motion.div 
+                        initial={{ x: -20, opacity: 0 }}
+                        animate={{ x: 0, opacity: 1 }}
+                        transition={{ delay: 0.3 }}
+                        className="relative group"
+                      >
                         <div className="absolute left-4 top-4 w-5 h-5 flex items-center justify-center text-zinc-400 font-black text-[10px] group-focus-within:scale-110 transition-transform">KM</div>
-                        <input
+                        <motion.input
+                          whileFocus={{ scale: 1.01 }}
                           type="number"
                           placeholder="Total KM (Required)"
                           className="w-full pl-12 pr-4 py-4 bg-white/50 border border-zinc-200 rounded-2xl focus:outline-none focus:ring-4 focus:ring-zinc-900/5 focus:bg-white transition-all shadow-sm hover:shadow-md"
@@ -1674,12 +1704,18 @@ export default function App() {
                           }}
                         />
                         <p className="text-[10px] font-bold text-zinc-400 mt-2 ml-2 uppercase tracking-widest">Enter KM manually or leave blank</p>
-                      </div>
+                      </motion.div>
 
-                      <div className="grid grid-cols-2 gap-4">
+                      <motion.div 
+                        initial={{ y: 20, opacity: 0 }}
+                        animate={{ y: 0, opacity: 1 }}
+                        transition={{ delay: 0.4 }}
+                        className="grid grid-cols-2 gap-4"
+                      >
                         <div className="relative group">
                           <Clock className="absolute left-4 top-4 w-4 h-4 text-zinc-400 group-focus-within:scale-110 transition-transform" />
-                          <input
+                          <motion.input
+                            whileFocus={{ scale: 1.02 }}
                             type="date"
                             className="w-full pl-10 pr-3 py-4 bg-white/50 border border-zinc-200 rounded-2xl focus:outline-none focus:ring-4 focus:ring-zinc-900/5 focus:bg-white transition-all text-sm shadow-sm hover:shadow-md"
                             value={bookingData.pickupDate}
@@ -1688,14 +1724,15 @@ export default function App() {
                         </div>
                         <div className="relative group">
                           <Clock className="absolute left-4 top-4 w-4 h-4 text-zinc-400 group-focus-within:scale-110 transition-transform" />
-                          <input
+                          <motion.input
+                            whileFocus={{ scale: 1.02 }}
                             type="time"
                             className="w-full pl-10 pr-3 py-4 bg-white/50 border border-zinc-200 rounded-2xl focus:outline-none focus:ring-4 focus:ring-zinc-900/5 focus:bg-white transition-all text-sm shadow-sm hover:shadow-md"
                             value={bookingData.pickupTime}
                             onChange={e => setBookingData({ ...bookingData, pickupTime: e.target.value })}
                           />
                         </div>
-                      </div>
+                      </motion.div>
                     </div>
 
                     {fareOptions.length === 0 ? (
@@ -1704,8 +1741,9 @@ export default function App() {
                         whileTap={{ scale: 0.98 }}
                         onClick={handleFindRides}
                         disabled={isEstimating || !bookingData.pickup || !bookingData.dropoff}
-                        className="w-full bg-zinc-900 text-white py-5 rounded-3xl font-black shadow-xl hover:shadow-2xl transition-all disabled:opacity-50 flex items-center justify-center gap-3 btn-3d"
+                        className="w-full bg-zinc-900 text-white py-5 rounded-3xl font-black shadow-xl hover:shadow-2xl transition-all disabled:opacity-50 flex items-center justify-center gap-3 btn-3d relative overflow-hidden group"
                       >
+                        <div className="absolute inset-0 shimmer opacity-0 group-hover:opacity-100 transition-opacity" />
                         {isEstimating ? (
                           <div className="w-6 h-6 border-4 border-white/30 border-t-white rounded-full animate-spin" />
                         ) : (
@@ -1739,7 +1777,7 @@ export default function App() {
                               className={`flex items-center justify-between p-5 rounded-3xl border-2 transition-all relative overflow-hidden group ${
                                 selectedOption?.type === option.type 
                                 ? 'border-zinc-900 bg-zinc-900 text-white shadow-2xl -translate-y-1' 
-                                : 'border-zinc-100 bg-white/50 hover:border-zinc-300 hover:-translate-y-1 shadow-sm hover:shadow-md'
+                                : 'glass p-5 hover:border-zinc-300 hover:-translate-y-1 shadow-sm hover:shadow-md'
                               }`}
                             >
                               {selectedOption?.type === option.type && (
@@ -1771,8 +1809,9 @@ export default function App() {
                           whileTap={{ scale: 0.98 }}
                           onClick={handleBookRide}
                           disabled={isBooking}
-                          className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 text-white py-5 rounded-3xl font-black shadow-xl hover:shadow-2xl transition-all disabled:opacity-50 btn-3d flex items-center justify-center gap-3"
+                          className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 text-white py-5 rounded-3xl font-black shadow-xl hover:shadow-2xl transition-all disabled:opacity-50 btn-3d flex items-center justify-center gap-3 relative overflow-hidden group"
                         >
+                          <div className="absolute inset-0 shimmer opacity-0 group-hover:opacity-100 transition-opacity" />
                           {isBooking ? (
                             <div className="w-6 h-6 border-4 border-white/30 border-t-white rounded-full animate-spin" />
                           ) : (
@@ -1789,11 +1828,19 @@ export default function App() {
                   {myRides.length > 0 && (
                     <div className="space-y-4">
                       <h2 className="text-xl font-bold flex items-center gap-2">
-                        <Clock className="w-5 h-5" /> Your Booking History
+                        <div className="p-1.5 bg-indigo-100 rounded-lg">
+                          <Clock className="w-5 h-5 text-indigo-600" />
+                        </div>
+                        <span className="gradient-text">Your Booking History</span>
                       </h2>
                       <div className="grid grid-cols-1 gap-4">
                         {myRides.map(ride => (
-                          <div key={ride.id} className="bg-white p-6 rounded-2xl border border-zinc-200 shadow-sm space-y-4">
+                          <motion.div 
+                            key={ride.id} 
+                            whileHover={{ scale: 1.01 }}
+                            className="glass p-6 rounded-[2rem] space-y-4 relative overflow-hidden group"
+                          >
+                            <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-br from-indigo-500/5 to-rose-500/5 rounded-full -mr-12 -mt-12 blur-xl group-hover:scale-150 transition-transform duration-700" />
                             <div className="flex justify-between items-start">
                               <div className="space-y-1">
                                 <p className="text-xs font-bold text-zinc-400 uppercase">Tracking ID: {ride.tracking_id}</p>
@@ -1855,7 +1902,7 @@ export default function App() {
                                 </div>
                               </div>
                             )}
-                          </div>
+                          </motion.div>
                         ))}
                       </div>
                     </div>
@@ -1998,10 +2045,19 @@ export default function App() {
               className="space-y-8"
             >
                   {!user ? (
-                    <div className="max-w-md mx-auto bg-white p-8 rounded-2xl shadow-sm border border-zinc-200">
-                      <h2 className="text-2xl font-bold mb-6 flex items-center gap-2">
-                        {forgotPasswordMode ? <KeyRound className="w-6 h-6" /> : <ShieldCheck className="w-6 h-6" />} 
-                        {forgotPasswordMode ? 'Reset Admin Password' : 'Admin Login'}
+                    <motion.div 
+                      initial={{ rotateY: -20, opacity: 0 }}
+                      animate={{ rotateY: 0, opacity: 1 }}
+                      className="max-w-md mx-auto glass p-10 rounded-[2.5rem] relative overflow-hidden"
+                    >
+                      <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-orange-500/10 to-rose-500/10 rounded-full -mr-16 -mt-16 blur-2xl" />
+                      <h2 className="text-2xl sm:text-3xl font-black mb-8 flex items-center gap-3">
+                        <div className="p-2 bg-zinc-900 rounded-xl shadow-lg shrink-0">
+                          {forgotPasswordMode ? <KeyRound className="text-white w-6 h-6" /> : <ShieldCheck className="text-white w-6 h-6" />} 
+                        </div>
+                        <span className="gradient-text truncate">
+                          {forgotPasswordMode ? 'Reset Admin Password' : 'Admin Login'}
+                        </span>
                       </h2>
                       {error && (
                         <div className="mb-4 p-3 bg-rose-50 text-rose-600 text-sm rounded-xl border border-rose-100">
@@ -2114,7 +2170,7 @@ export default function App() {
                           </div>
                         </form>
                       )}
-                    </div>
+                    </motion.div>
                   ) : (
                     user?.role === 'admin' || user?.role === 'owner' ? (
                       <div className="space-y-8">
@@ -2136,13 +2192,15 @@ export default function App() {
                               key={i}
                               initial={{ y: 20, opacity: 0 }}
                               animate={{ y: 0, opacity: 1 }}
+                              whileHover={{ y: -5, scale: 1.02 }}
                               transition={{ delay: i * 0.1 }}
-                              className="glass p-8 rounded-3xl relative overflow-hidden group hover:-translate-y-1 transition-all"
+                              className="glass p-8 rounded-3xl relative overflow-hidden group transition-all cursor-default"
                             >
+                              <div className={`absolute inset-0 shimmer opacity-0 group-hover:opacity-100 transition-opacity`} />
                               <div className={`absolute top-0 right-0 w-24 h-24 bg-gradient-to-br ${stat.color} opacity-10 rounded-full -mr-12 -mt-12 blur-2xl group-hover:scale-150 transition-all`} />
-                              <stat.icon className="w-6 h-6 text-zinc-400 mb-4" />
+                              <stat.icon className="w-6 h-6 text-zinc-400 mb-4 group-hover:text-zinc-900 transition-colors" />
                               <p className="text-[10px] font-black uppercase tracking-widest text-zinc-500">{stat.label}</p>
-                              <p className="text-3xl font-black">{stat.value}</p>
+                              <p className="text-3xl font-black tracking-tighter mt-1">{stat.value}</p>
                             </motion.div>
                           ))}
                         </div>
@@ -2562,10 +2620,19 @@ export default function App() {
               className="space-y-8"
             >
               {!user ? (
-                <div className="max-w-md mx-auto bg-white p-8 rounded-2xl shadow-sm border border-zinc-200">
-                  <h2 className="text-2xl font-bold mb-6 flex items-center gap-2">
-                    {forgotPasswordMode ? <KeyRound className="w-6 h-6" /> : <Car className="w-6 h-6" />} 
-                    {forgotPasswordMode ? 'Reset Password' : (driverAuthMode === 'login' ? 'Driver Login' : 'Driver Registration')}
+                <motion.div 
+                  initial={{ rotateY: 20, opacity: 0 }}
+                  animate={{ rotateY: 0, opacity: 1 }}
+                  className="max-w-md mx-auto glass p-10 rounded-[2.5rem] relative overflow-hidden"
+                >
+                  <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-orange-500/10 to-rose-500/10 rounded-full -mr-16 -mt-16 blur-2xl" />
+                  <h2 className="text-2xl sm:text-3xl font-black mb-8 flex items-center gap-3">
+                    <div className="p-2 bg-zinc-900 rounded-xl shadow-lg shrink-0">
+                      {forgotPasswordMode ? <KeyRound className="text-white w-6 h-6" /> : <Car className="text-white w-6 h-6" />} 
+                    </div>
+                    <span className="gradient-text truncate">
+                      {forgotPasswordMode ? 'Reset Password' : (driverAuthMode === 'login' ? 'Driver Login' : 'Driver Registration')}
+                    </span>
                   </h2>
                   {error && (
                     <div className="mb-4 p-3 bg-rose-50 text-rose-600 text-sm rounded-xl border border-rose-100">
@@ -2708,7 +2775,7 @@ export default function App() {
                       </div>
                     </>
                   )}
-                </div>
+                </motion.div>
               ) : (
                 user?.role === 'driver' ? (
                   <div className="space-y-8">
@@ -2722,19 +2789,25 @@ export default function App() {
                         <p className="text-zinc-400 font-bold uppercase tracking-widest text-xs mb-2">Total Earnings</p>
                         <h2 className="text-6xl font-black mb-8">₹{driverWallet.balance}</h2>
                       <div className="flex flex-wrap gap-3">
-                        <button 
+                        <motion.button 
+                          whileHover={{ scale: 1.05 }}
+                          whileTap={{ scale: 0.95 }}
                           onClick={handleRequestWithdrawal}
-                          className="bg-white text-zinc-900 px-6 py-3 rounded-xl font-bold hover:bg-zinc-100 transition-all flex items-center gap-2"
+                          className="bg-white text-zinc-900 px-6 py-3 rounded-xl font-bold hover:bg-zinc-100 transition-all flex items-center gap-2 shadow-lg relative overflow-hidden group"
                         >
+                          <div className="absolute inset-0 shimmer opacity-0 group-hover:opacity-100 transition-opacity" />
                           <CreditCard className="w-5 h-5" /> Withdraw to Bank
-                        </button>
+                        </motion.button>
                         {!isAudioUnlocked && (
-                          <button 
+                          <motion.button 
+                            whileHover={{ scale: 1.05 }}
+                            whileTap={{ scale: 0.95 }}
                             onClick={unlockAudio}
-                            className="bg-emerald-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-emerald-500 transition-all flex items-center gap-2"
+                            className="bg-emerald-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-emerald-500 transition-all flex items-center gap-2 shadow-lg relative overflow-hidden group"
                           >
+                            <div className="absolute inset-0 shimmer opacity-0 group-hover:opacity-100 transition-opacity" />
                             <ShieldCheck className="w-5 h-5" /> Enable Sound Alerts
-                          </button>
+                          </motion.button>
                         )}
                       </div>
                     </div>
