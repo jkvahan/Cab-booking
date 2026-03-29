@@ -24,7 +24,10 @@ import {
   Phone,
   Lock,
   IndianRupee,
-  AlertCircle
+  AlertCircle,
+  Star,
+  MessageSquare,
+  Trash2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -38,6 +41,7 @@ import {
   orderBy, 
   onSnapshot, 
   addDoc, 
+  deleteDoc,
   serverTimestamp,
   getDocFromServer,
   limit,
@@ -233,6 +237,10 @@ interface Ride {
   distance?: number;
   pickup_date?: string;
   pickup_time?: string;
+  rating?: number;
+  review?: string;
+  complaint?: string;
+  complaint_status?: 'pending' | 'resolved';
 }
 
 interface AdminUser {
@@ -503,6 +511,24 @@ export default function App() {
   const [editingAdmin, setEditingAdmin] = useState<AdminUser | any | null>(null);
   const [editingUser, setEditingUser] = useState<any | null>(null);
   const [editingDriver, setEditingDriver] = useState<any | null>(null);
+  const [isManualRideModalOpen, setIsManualRideModalOpen] = useState(false);
+  const [manualRideData, setManualRideData] = useState({
+    pickup_location: '',
+    dropoff_location: '',
+    fare: '',
+    user_name: '',
+    user_phone: '',
+    driver_id: '',
+    status: 'pending' as Ride['status'],
+    trip_type: 'single' as Ride['trip_type'],
+    distance: ''
+  });
+
+  const [reviewModal, setReviewModal] = useState<{ rideId: string, driverName: string } | null>(null);
+  const [rating, setRating] = useState(5);
+  const [reviewMessage, setReviewMessage] = useState('');
+  const [complaintModal, setComplaintModal] = useState<{ rideId: string, trackingId: string } | null>(null);
+  const [complaintMessage, setComplaintMessage] = useState('');
 
   // Driver Data
   const [availableRides, setAvailableRides] = useState<Ride[]>([]);
@@ -619,6 +645,7 @@ export default function App() {
     let unsubscribeVehicles: () => void;
     let unsubscribeAllRides: () => void;
     let unsubscribeNotifications: () => void;
+    let unsubscribeUsers: () => void;
     let unsubscribeDriverData: () => void;
     let unsubscribeDriverTransactions: () => void;
     let unsubscribeAdmins: () => void;
@@ -759,6 +786,11 @@ export default function App() {
         setAdminRides(rides);
       }, (err) => handleFirestoreError(err, OperationType.LIST, 'rides'));
 
+      unsubscribeUsers = onSnapshot(collection(db, 'users'), (snapshot) => {
+        const users = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as any));
+        setAdminUsers(users);
+      }, (err) => handleFirestoreError(err, OperationType.LIST, 'users'));
+
       // Only owner can see other admins
       if (user.role === 'owner') {
         unsubscribeAdmins = onSnapshot(collection(db, 'admins'), (snapshot) => {
@@ -779,6 +811,7 @@ export default function App() {
       unsubscribeDriverData?.();
       unsubscribeDriverTransactions?.();
       unsubscribeAdmins?.();
+      unsubscribeUsers?.();
     };
   }, [view, user, isAuthReady]);
 
@@ -802,7 +835,7 @@ export default function App() {
         } else {
           const adminDoc = await getDoc(doc(db, 'admins', firebaseUser.uid));
           if (adminDoc.exists()) {
-            setUser({ ...adminDoc.data(), id: firebaseUser.uid, role: 'admin' });
+            setUser({ ...adminDoc.data(), id: firebaseUser.uid });
           } else {
             // New account via Google: Use the targetRole
             const collectionName = targetRole === 'driver' ? 'drivers' : 'users';
@@ -819,7 +852,8 @@ export default function App() {
               phone: firebaseUser.phoneNumber || '',
               email: firebaseUser.email || '',
               created_at: new Date().toISOString(),
-              role: 'user'
+              role: 'user',
+              consecutive_cancellations: 0
             };
             await setDoc(doc(db, collectionName, firebaseUser.uid), data);
             setUser({ ...data, id: firebaseUser.uid });
@@ -887,7 +921,8 @@ export default function App() {
         phone: userLoginData.phone,
         password: userLoginData.password,
         created_at: new Date().toISOString(),
-        role: 'user'
+        role: 'user',
+        consecutive_cancellations: 0
       };
 
       const docRef = await addDoc(collection(db, 'users'), data);
@@ -905,7 +940,7 @@ export default function App() {
 
   const handleUserCancelRide = async (rideId: string) => {
     setConfirmModal({
-      message: "Are you sure you want to cancel this ride?",
+      message: "WARNING: Cancelling this ride will increase your next ride's fare by 2% and you will lose any available discounts. Are you sure you want to cancel?",
       onConfirm: async () => {
         try {
           const rideRef = doc(db, 'rides', rideId);
@@ -913,6 +948,19 @@ export default function App() {
           const rideData = rideSnap.data();
           
           await updateDoc(rideRef, { status: 'cancelled' });
+
+          // Increment consecutive cancellations for the user
+          if (user?.id) {
+            const userRef = doc(db, 'users', user.id);
+            const userSnap = await getDoc(userRef);
+            if (userSnap.exists()) {
+              const currentCancellations = userSnap.data().consecutive_cancellations || 0;
+              const nextCancellations = currentCancellations + 1;
+              await updateDoc(userRef, { consecutive_cancellations: nextCancellations });
+              // Update local state
+              setUser(prev => prev ? { ...prev, consecutive_cancellations: nextCancellations } : null);
+            }
+          }
 
           // Send Notifications
           sendNotification('RIDE_CANCELLED', {
@@ -925,6 +973,49 @@ export default function App() {
         }
       }
     });
+  };
+
+  const handleSubmitReview = async () => {
+    if (!reviewModal) return;
+    setIsActionLoading(true);
+    try {
+      const rideRef = doc(db, 'rides', reviewModal.rideId);
+      await updateDoc(rideRef, {
+        rating: rating,
+        review: reviewMessage
+      });
+      setToast({ message: "Review submitted successfully", type: 'success' });
+      setReviewModal(null);
+      setRating(5);
+      setReviewMessage('');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `rides/${reviewModal.rideId}`);
+    } finally {
+      setIsActionLoading(false);
+    }
+  };
+
+  const handleSubmitComplaint = async () => {
+    if (!complaintModal) return;
+    if (!complaintMessage.trim()) {
+      setToast({ message: "Please enter your complaint message", type: 'error' });
+      return;
+    }
+    setIsActionLoading(true);
+    try {
+      const rideRef = doc(db, 'rides', complaintModal.rideId);
+      await updateDoc(rideRef, {
+        complaint: complaintMessage,
+        complaint_status: 'pending'
+      });
+      setToast({ message: "Complaint submitted successfully. Admin will review it.", type: 'success' });
+      setComplaintModal(null);
+      setComplaintMessage('');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `rides/${complaintModal.rideId}`);
+    } finally {
+      setIsActionLoading(false);
+    }
   };
 
   const fetchAdminData = () => {};
@@ -963,6 +1054,76 @@ export default function App() {
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `users/${editingUser.id}`);
     }
+  };
+
+  const handleDeleteUser = async (userId: string) => {
+    setConfirmModal({
+      message: 'Are you sure you want to delete this user? This action cannot be undone.',
+      onConfirm: async () => {
+        try {
+          await deleteDoc(doc(db, 'users', userId));
+          setToast({ message: 'User deleted successfully', type: 'success' });
+        } catch (err) {
+          handleFirestoreError(err, OperationType.DELETE, `users/${userId}`);
+        }
+        setConfirmModal(null);
+      }
+    });
+  };
+
+  const handleDeleteDriver = async (driverId: string) => {
+    setConfirmModal({
+      message: 'Are you sure you want to delete this driver? This action cannot be undone.',
+      onConfirm: async () => {
+        try {
+          await deleteDoc(doc(db, 'drivers', driverId));
+          // Also delete associated vehicle if exists
+          const vq = query(collection(db, 'vehicles'), where('driver_id', '==', driverId));
+          const vSnap = await getDocs(vq);
+          vSnap.forEach(async (vDoc) => {
+            await deleteDoc(doc(db, 'vehicles', vDoc.id));
+          });
+          setToast({ message: 'Driver deleted successfully', type: 'success' });
+        } catch (err) {
+          handleFirestoreError(err, OperationType.DELETE, `drivers/${driverId}`);
+        }
+        setConfirmModal(null);
+      }
+    });
+  };
+
+  const handleDeleteWithdrawal = async (requestId: string) => {
+    setConfirmModal({
+      message: 'Are you sure you want to delete this withdrawal request?',
+      onConfirm: async () => {
+        try {
+          await deleteDoc(doc(db, 'withdrawal_requests', requestId));
+          setToast({ message: 'Withdrawal request deleted successfully', type: 'success' });
+        } catch (err) {
+          handleFirestoreError(err, OperationType.DELETE, `withdrawal_requests/${requestId}`);
+        }
+        setConfirmModal(null);
+      }
+    });
+  };
+
+  const handleDeleteAdmin = async (adminId: string) => {
+    if (adminId === user.id) {
+      setToast({ message: 'You cannot delete your own profile', type: 'error' });
+      return;
+    }
+    setConfirmModal({
+      message: 'Are you sure you want to delete this admin profile?',
+      onConfirm: async () => {
+        try {
+          await deleteDoc(doc(db, 'admins', adminId));
+          setToast({ message: 'Admin profile deleted successfully', type: 'success' });
+        } catch (err) {
+          handleFirestoreError(err, OperationType.DELETE, `admins/${adminId}`);
+        }
+        setConfirmModal(null);
+      }
+    });
   };
 
   const handleUpdateDriver = async (e: React.FormEvent) => {
@@ -1019,10 +1180,6 @@ export default function App() {
     }
   };
 
-  const handleRemoveAdmin = async (id: string) => {
-    alert("Deletion is disabled as per permanent data policy.");
-  };
-
   const handleSendNotification = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newNotification.message) return;
@@ -1053,14 +1210,6 @@ export default function App() {
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `notifications/${notificationId}`);
     }
-  };
-
-  const handleDeleteUser = async (id: string) => {
-    alert("Deletion is disabled as per permanent data policy.");
-  };
-
-  const handleDeleteDriver = async (id: string) => {
-    alert("Deletion is disabled as per permanent data policy.");
   };
 
   const handleWalletAdjust = async (driverId: string, amount: number, type: 'credit' | 'debit') => {
@@ -1095,6 +1244,88 @@ export default function App() {
       }
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `drivers/${driverId}`);
+    }
+  };
+
+  const handleDeleteRide = async (rideId: string) => {
+    if (user.role !== 'owner') return;
+    
+    setConfirmModal({
+      message: "Are you sure you want to permanently delete this ride record? This action cannot be undone and is intended for database maintenance.",
+      onConfirm: async () => {
+        setIsActionLoading(true);
+        try {
+          await deleteDoc(doc(db, 'rides', rideId));
+          setToast({ message: "Ride record deleted successfully", type: 'success' });
+        } catch (err) {
+          handleFirestoreError(err, OperationType.DELETE, `rides/${rideId}`);
+        } finally {
+          setIsActionLoading(false);
+        }
+      }
+    });
+  };
+
+  const handleResolveComplaint = async (rideId: string) => {
+    try {
+      const rideRef = doc(db, 'rides', rideId);
+      await updateDoc(rideRef, {
+        complaint_status: 'resolved'
+      });
+      setToast({ message: "Complaint marked as resolved", type: 'success' });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `rides/${rideId}`);
+    }
+  };
+
+  const handleManualAddRide = async () => {
+    if (user.role !== 'owner') return;
+    if (!manualRideData.pickup_location || !manualRideData.dropoff_location || !manualRideData.fare || !manualRideData.user_name || !manualRideData.user_phone) {
+      setToast({ message: "Please fill all required fields", type: 'error' });
+      return;
+    }
+
+    setIsActionLoading(true);
+    try {
+      const trackingId = `JKV-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
+      const driver = adminDrivers.find(d => d.id === manualRideData.driver_id);
+      
+      const rideData = {
+        tracking_id: trackingId,
+        pickup_location: manualRideData.pickup_location,
+        dropoff_location: manualRideData.dropoff_location,
+        fare: parseFloat(manualRideData.fare),
+        status: manualRideData.status,
+        user_name: manualRideData.user_name,
+        user_phone: manualRideData.user_phone,
+        driver_id: manualRideData.driver_id || null,
+        driver_name: driver ? driver.name : null,
+        driver_phone: driver ? driver.phone : null,
+        trip_type: manualRideData.trip_type,
+        distance: manualRideData.distance ? parseFloat(manualRideData.distance) : null,
+        created_at: new Date().toISOString(),
+        accepted_at: manualRideData.status !== 'pending' ? new Date().toISOString() : null,
+        completed_at: manualRideData.status === 'completed' ? new Date().toISOString() : null
+      };
+
+      await addDoc(collection(db, 'rides'), rideData);
+      setToast({ message: "Manual ride added successfully", type: 'success' });
+      setIsManualRideModalOpen(false);
+      setManualRideData({
+        pickup_location: '',
+        dropoff_location: '',
+        fare: '',
+        user_name: '',
+        user_phone: '',
+        driver_id: '',
+        status: 'pending',
+        trip_type: 'single',
+        distance: ''
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.CREATE, 'rides');
+    } finally {
+      setIsActionLoading(false);
     }
   };
 
@@ -1434,7 +1665,13 @@ export default function App() {
 
     try {
       const manualDist = bookingData.manualDistance ? parseFloat(bookingData.manualDistance) : undefined;
-      const data = await calculateRealFare(bookingData.pickup, bookingData.dropoff, bookingData.tripType, manualDist);
+      const data = await calculateRealFare(
+        bookingData.pickup, 
+        bookingData.dropoff, 
+        bookingData.tripType, 
+        manualDist,
+        user?.consecutive_cancellations || 0
+      );
       setFareOptions(data.options || []);
       setEstimatedDistance(data.distance || null);
       setSelectedOption(data.options?.[0] || null);
@@ -1602,6 +1839,17 @@ export default function App() {
           status: 'completed',
           completed_at: new Date().toISOString()
         });
+
+        // Reset user's consecutive cancellations
+        const rideUserId = rideData.user_id;
+        if (rideUserId) {
+          const userRef = doc(db, 'users', rideUserId);
+          await updateDoc(userRef, { consecutive_cancellations: 0 });
+          // Update local state if it's the current user
+          if (user?.id === rideUserId) {
+            setUser(prev => prev ? { ...prev, consecutive_cancellations: 0 } : null);
+          }
+        }
 
         // Send Notifications
         sendNotification('RIDE_COMPLETED', {
@@ -2177,21 +2425,62 @@ export default function App() {
                                 {getStatusLabel(ride.status)}
                               </div>
                             </div>
-                            <div className="flex items-center gap-2">
-                              {ride.trip_type === 'round' ? (
-                                <span className="px-2 py-1 rounded text-[10px] font-bold uppercase bg-indigo-100 text-indigo-700">Round Trip</span>
-                              ) : (
-                                <span className="px-2 py-1 rounded text-[10px] font-bold uppercase bg-zinc-100 text-zinc-700">Single Trip</span>
-                              )}
-                              {ride.distance && (
-                                <span className="text-[10px] font-bold text-zinc-400 uppercase">{ride.distance} KM</span>
-                              )}
-                              {ride.pickup_date && (
-                                <span className="text-[10px] font-bold text-emerald-600 uppercase flex items-center gap-1">
-                                  <Clock className="w-3 h-3" /> {ride.pickup_date} {ride.pickup_time}
-                                </span>
-                              )}
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                {ride.trip_type === 'round' ? (
+                                  <span className="px-2 py-1 rounded text-[10px] font-bold uppercase bg-indigo-100 text-indigo-700">Round Trip</span>
+                                ) : (
+                                  <span className="px-2 py-1 rounded text-[10px] font-bold uppercase bg-zinc-100 text-zinc-700">Single Trip</span>
+                                )}
+                                {ride.distance && (
+                                  <span className="text-[10px] font-bold text-zinc-400 uppercase">{ride.distance} KM</span>
+                                )}
+                                {ride.pickup_date && (
+                                  <span className="text-[10px] font-bold text-emerald-600 uppercase flex items-center gap-1">
+                                    <Clock className="w-3 h-3" /> {ride.pickup_date} {ride.pickup_time}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-3">
+                                {(ride.status === 'accepted' || ride.status === 'ongoing') && (
+                                  <button
+                                    onClick={() => setComplaintModal({ rideId: ride.id, trackingId: ride.tracking_id })}
+                                    className="flex items-center gap-1 text-rose-600 text-[10px] font-bold hover:underline bg-rose-50 px-2 py-1 rounded-lg border border-rose-100"
+                                  >
+                                    <AlertCircle className="w-3 h-3" /> Complaint
+                                  </button>
+                                )}
+                                {ride.status === 'completed' && !ride.rating && (
+                                  <button
+                                    onClick={() => setReviewModal({ rideId: ride.id, driverName: ride.driver_name || 'Driver' })}
+                                    className="flex items-center gap-1 text-emerald-600 text-[10px] font-bold hover:underline bg-emerald-50 px-2 py-1 rounded-lg border border-emerald-100"
+                                  >
+                                    <Star className="w-3 h-3" /> Rate & Review
+                                  </button>
+                                )}
+                              </div>
                             </div>
+                            {ride.rating && (
+                              <div className="p-3 bg-emerald-50/50 rounded-xl border border-emerald-100/50">
+                                <div className="flex items-center gap-1 text-emerald-600 font-bold text-xs mb-1">
+                                  <Star className="w-3 h-3 fill-current" /> {ride.rating}/5 Rating Given
+                                </div>
+                                {ride.review && <p className="text-xs text-zinc-600 italic">"{ride.review}"</p>}
+                              </div>
+                            )}
+                            {ride.complaint && (
+                              <div className="p-3 bg-rose-50/50 rounded-xl border border-rose-100/50">
+                                <div className="flex items-center justify-between mb-1">
+                                  <p className="text-[10px] font-bold text-rose-600 uppercase flex items-center gap-1">
+                                    <AlertCircle className="w-3 h-3" /> Your Complaint
+                                  </p>
+                                  <span className={`text-[8px] font-bold uppercase ${ride.complaint_status === 'resolved' ? 'text-emerald-600' : 'text-rose-500'}`}>
+                                    {ride.complaint_status || 'pending'}
+                                  </span>
+                                </div>
+                                <p className="text-xs text-zinc-600 italic">"{ride.complaint}"</p>
+                              </div>
+                            )}
                             {ride.status === 'accepted' && (
                               <div className="bg-emerald-50 border border-emerald-100 p-3 rounded-xl">
                                 <p className="text-xs font-bold text-emerald-600 uppercase">Driver is arriving</p>
@@ -2475,6 +2764,68 @@ export default function App() {
                           ))}
                         </div>
 
+                        {user.role === 'owner' && (
+                          <div className="bg-zinc-900 text-white p-8 rounded-[2.5rem] relative overflow-hidden shadow-2xl">
+                            <div className="absolute top-0 right-0 w-64 h-64 bg-emerald-500/10 rounded-full -mr-32 -mt-32 blur-3xl" />
+                            <div className="relative z-10">
+                              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-8 mb-8">
+                                <div className="space-y-2">
+                                  <h3 className="text-2xl font-black tracking-tight flex items-center gap-3">
+                                    <div className="p-2 bg-emerald-500/20 rounded-xl">
+                                      <Settings className="w-6 h-6 text-emerald-400" />
+                                    </div>
+                                    System Health & Memory
+                                  </h3>
+                                  <p className="text-zinc-400 text-sm max-w-md leading-relaxed">
+                                    Real-time monitoring of database storage and document limits. 
+                                    Free tier (Spark) provides 1GB storage.
+                                  </p>
+                                </div>
+                                <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 w-full lg:w-auto">
+                                  <div className="text-center p-5 bg-white/5 rounded-3xl border border-white/10 backdrop-blur-sm">
+                                    <p className="text-[10px] uppercase font-black tracking-widest text-zinc-500 mb-2">Total Rides</p>
+                                    <p className="text-2xl font-black">{adminRides.length}</p>
+                                  </div>
+                                  <div className="text-center p-5 bg-white/5 rounded-3xl border border-white/10 backdrop-blur-sm">
+                                    <p className="text-[10px] uppercase font-black tracking-widest text-zinc-500 mb-2">Total Users</p>
+                                    <p className="text-2xl font-black">{adminUsers.length}</p>
+                                  </div>
+                                  <div className="text-center p-5 bg-white/5 rounded-3xl border border-white/10 backdrop-blur-sm col-span-2 sm:col-span-1">
+                                    <p className="text-[10px] uppercase font-black tracking-widest text-zinc-500 mb-2">Memory Left</p>
+                                    <p className="text-2xl font-black text-emerald-400">
+                                      {(100 - Math.min(100, (adminRides.length + adminUsers.length + adminDrivers.length) / 100)).toFixed(1)}%
+                                    </p>
+                                  </div>
+                                </div>
+                              </div>
+                              
+                              <div className="space-y-4 bg-white/5 p-6 rounded-3xl border border-white/10">
+                                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+                                  <div className="flex items-center gap-2">
+                                    <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse" />
+                                    <p className="text-[10px] uppercase font-black tracking-widest text-zinc-400">Storage Capacity Utilization</p>
+                                  </div>
+                                  <p className="text-[10px] font-black text-emerald-400 bg-emerald-400/10 px-2 py-1 rounded-lg">
+                                    {(adminRides.length + adminUsers.length + adminDrivers.length)} / 10,000 Documents (Estimated)
+                                  </p>
+                                </div>
+                                <div className="w-full bg-white/5 h-4 rounded-full overflow-hidden border border-white/10 p-1">
+                                  <motion.div 
+                                    initial={{ width: 0 }}
+                                    animate={{ width: `${Math.min(100, (adminRides.length + adminUsers.length + adminDrivers.length) / 100)}%` }}
+                                    className="bg-gradient-to-r from-emerald-500 via-emerald-400 to-teal-400 h-full rounded-full shadow-[0_0_15px_rgba(52,211,153,0.3)]"
+                                  />
+                                </div>
+                                <div className="flex justify-between text-[9px] font-bold text-zinc-500 uppercase tracking-tighter">
+                                  <span>0% Used</span>
+                                  <span>50% Warning</span>
+                                  <span>100% Limit</span>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
                   {user.role === 'owner' && (
                     <div className="bg-white rounded-2xl border border-zinc-200 overflow-hidden">
                       <div className="p-6 border-b border-zinc-100">
@@ -2553,6 +2904,14 @@ export default function App() {
                                 )}
                               </div>
                               <div className="flex items-center gap-4">
+                                {admin.id !== user.id && (
+                                  <button 
+                                    onClick={() => handleDeleteAdmin(admin.id)}
+                                    className="p-2 hover:bg-rose-50 rounded-lg transition-all group"
+                                  >
+                                    <Trash2 className="w-4 h-4 text-zinc-400 group-hover:text-rose-600" />
+                                  </button>
+                                )}
                                 {admin.role !== 'owner' && (
                                   <button 
                                     onClick={() => setEditingAdmin(admin)}
@@ -2712,6 +3071,13 @@ export default function App() {
                                   {req.status}
                                 </span>
                               )}
+                              <button 
+                                onClick={() => handleDeleteWithdrawal(req.id)}
+                                className="p-1.5 bg-rose-50 text-rose-600 rounded-lg hover:bg-rose-100 transition-all"
+                                title="Delete Request"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
                             </div>
                           </div>
                         ))
@@ -2738,12 +3104,20 @@ export default function App() {
                             </div>
                             <div className="flex items-center gap-2">
                               {user.role === 'owner' && (
-                                <button 
-                                  onClick={() => setEditingUser(u)}
-                                  className="p-2 hover:bg-zinc-100 rounded-lg transition-all"
-                                >
-                                  <Settings className="w-4 h-4 text-zinc-400" />
-                                </button>
+                                <>
+                                  <button 
+                                    onClick={() => setEditingUser(u)}
+                                    className="p-2 hover:bg-zinc-100 rounded-lg transition-all"
+                                  >
+                                    <Settings className="w-4 h-4 text-zinc-400" />
+                                  </button>
+                                  <button 
+                                    onClick={() => handleDeleteUser(u.id)}
+                                    className="p-2 hover:bg-rose-50 rounded-lg transition-all group"
+                                  >
+                                    <Trash2 className="w-4 h-4 text-zinc-400 group-hover:text-rose-600" />
+                                  </button>
+                                </>
                               )}
                               <div className="p-2 text-zinc-300">
                                 <Lock className="w-4 h-4" />
@@ -2804,12 +3178,20 @@ export default function App() {
                               </div>
                               <div className="flex items-center gap-2">
                                 {user.role === 'owner' && (
-                                  <button 
-                                    onClick={() => setEditingDriver(driver)}
-                                    className="p-2 hover:bg-zinc-100 rounded-lg transition-all"
-                                  >
-                                    <Settings className="w-4 h-4 text-zinc-400" />
-                                  </button>
+                                  <>
+                                    <button 
+                                      onClick={() => setEditingDriver(driver)}
+                                      className="p-2 hover:bg-zinc-100 rounded-lg transition-all"
+                                    >
+                                      <Settings className="w-4 h-4 text-zinc-400" />
+                                    </button>
+                                    <button 
+                                      onClick={() => handleDeleteDriver(driver.id)}
+                                      className="p-2 hover:bg-rose-50 rounded-lg transition-all group"
+                                    >
+                                      <Trash2 className="w-4 h-4 text-zinc-400 group-hover:text-rose-600" />
+                                    </button>
+                                  </>
                                 )}
                                 <div className="p-1.5 text-zinc-300">
                                   <Lock className="w-4 h-4" />
@@ -2876,8 +3258,17 @@ export default function App() {
 
                   {(user.role === 'owner' || user.permissions?.rides) && (
                     <div className="bg-white rounded-2xl border border-zinc-200 overflow-hidden">
-                      <div className="p-6 border-b border-zinc-100">
+                      <div className="p-6 border-b border-zinc-100 flex justify-between items-center">
                         <h3 className="font-bold text-lg">Recent Rides</h3>
+                        {user.role === 'owner' && (
+                          <button 
+                            onClick={() => setIsManualRideModalOpen(true)}
+                            className="flex items-center gap-2 px-4 py-2 bg-zinc-900 text-white rounded-xl text-xs font-bold hover:bg-zinc-800 transition-all shadow-lg"
+                          >
+                            <Plus className="w-4 h-4" />
+                            Manual Add Ride
+                          </button>
+                        )}
                       </div>
                       <div className="overflow-x-auto">
                       <table className="w-full text-left">
@@ -2890,6 +3281,8 @@ export default function App() {
                             <th className="px-6 py-4">KM</th>
                             <th className="px-6 py-4">Status</th>
                             <th className="px-6 py-4">Fare</th>
+                            <th className="px-6 py-4">Feedback</th>
+                            {user.role === 'owner' && <th className="px-6 py-4 text-right">Actions</th>}
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-zinc-100">
@@ -2923,6 +3316,49 @@ export default function App() {
                                 </span>
                               </td>
                               <td className="px-6 py-4 font-bold">₹{ride.fare}</td>
+                              <td className="px-6 py-4">
+                                {ride.rating && (
+                                  <div className="flex flex-col gap-1 mb-1">
+                                    <div className="flex items-center gap-1 text-emerald-600 font-bold text-[10px]">
+                                      <Star className="w-3 h-3 fill-current" /> {ride.rating}/5
+                                    </div>
+                                    {ride.review && <p className="text-[9px] text-zinc-500 italic max-w-[120px] truncate" title={ride.review}>"{ride.review}"</p>}
+                                  </div>
+                                )}
+                                {ride.complaint && (
+                                  <div className="p-1.5 bg-rose-50 border border-rose-100 rounded-lg">
+                                    <p className="text-[9px] font-bold text-rose-600 uppercase flex items-center gap-1">
+                                      <AlertCircle className="w-2.5 h-2.5" /> Complaint
+                                    </p>
+                                    <p className="text-[9px] text-rose-700 italic mb-1 line-clamp-1" title={ride.complaint}>"{ride.complaint}"</p>
+                                    <div className="flex justify-between items-center">
+                                      <span className={`text-[7px] font-bold uppercase ${ride.complaint_status === 'resolved' ? 'text-emerald-600' : 'text-rose-500'}`}>
+                                        {ride.complaint_status || 'pending'}
+                                      </span>
+                                      {ride.complaint_status !== 'resolved' && (
+                                        <button 
+                                          onClick={() => handleResolveComplaint(ride.id)}
+                                          className="text-[7px] bg-white border border-rose-200 px-1 py-0.5 rounded text-rose-600 font-bold hover:bg-rose-50"
+                                        >
+                                          Resolve
+                                        </button>
+                                      )}
+                                    </div>
+                                  </div>
+                                )}
+                                {!ride.rating && !ride.complaint && <span className="text-zinc-300 text-[10px]">---</span>}
+                              </td>
+                              {user.role === 'owner' && (
+                                <td className="px-6 py-4 text-right">
+                                  <button 
+                                    onClick={() => handleDeleteRide(ride.id)}
+                                    className="p-2 hover:bg-rose-50 rounded-lg transition-all group"
+                                    title="Delete Ride Record"
+                                  >
+                                    <X className="w-4 h-4 text-zinc-300 group-hover:text-rose-600" />
+                                  </button>
+                                </td>
+                              )}
                             </tr>
                           ))}
                         </tbody>
@@ -3607,6 +4043,30 @@ export default function App() {
                                 </div>
                               </div>
                             )}
+                            {ride.status === 'completed' && ride.rating && (
+                              <div className="mt-3 p-3 bg-zinc-50 rounded-xl border border-zinc-100 space-y-1">
+                                <div className="flex items-center justify-between">
+                                  <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Passenger Rating</p>
+                                  <div className="flex items-center gap-1 text-emerald-600 font-bold text-xs">
+                                    <Star className="w-3 h-3 fill-current" /> {ride.rating}/5
+                                  </div>
+                                </div>
+                                {ride.review && (
+                                  <p className="text-xs text-zinc-600 italic leading-relaxed">"{ride.review}"</p>
+                                )}
+                              </div>
+                            )}
+                            {ride.complaint && (
+                              <div className="mt-3 p-3 bg-rose-50 rounded-xl border border-rose-100 space-y-1">
+                                <p className="text-[10px] font-bold text-rose-600 uppercase flex items-center gap-1">
+                                  <AlertCircle className="w-3 h-3" /> Complaint Filed
+                                </p>
+                                <p className="text-xs text-rose-700 italic leading-relaxed">"{ride.complaint}"</p>
+                                <p className={`text-[8px] font-bold uppercase ${ride.complaint_status === 'resolved' ? 'text-emerald-600' : 'text-rose-500'}`}>
+                                  Status: {ride.complaint_status || 'pending'}
+                                </p>
+                              </div>
+                            )}
                           </div>
                         ))}
                       </div>
@@ -3648,6 +4108,249 @@ export default function App() {
               )}
             </AnimatePresence>
           </main>
+
+      {/* Review Modal */}
+      <AnimatePresence>
+        {reviewModal && (
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden"
+            >
+              <div className="p-6 border-b border-zinc-100 flex justify-between items-center bg-zinc-900 text-white">
+                <div>
+                  <h3 className="font-bold text-xl">Rate Your Experience</h3>
+                  <p className="text-xs opacity-60">How was your ride with {reviewModal.driverName}?</p>
+                </div>
+                <button onClick={() => setReviewModal(null)} className="p-2 hover:bg-white/10 rounded-full transition-colors">
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+              <div className="p-6 space-y-6">
+                <div className="flex justify-center gap-2">
+                  {[1, 2, 3, 4, 5].map((star) => (
+                    <button
+                      key={star}
+                      onClick={() => setRating(star)}
+                      className="p-2 transition-all hover:scale-110"
+                    >
+                      <Star 
+                        className={`w-10 h-10 ${star <= rating ? 'fill-emerald-500 text-emerald-500' : 'text-zinc-200'}`} 
+                      />
+                    </button>
+                  ))}
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Your Message (Optional)</label>
+                  <textarea
+                    value={reviewMessage}
+                    onChange={(e) => setReviewMessage(e.target.value)}
+                    placeholder="Tell us about your experience..."
+                    className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-2xl text-sm focus:ring-2 focus:ring-zinc-900 outline-none min-h-[100px] resize-none"
+                  />
+                </div>
+                <button
+                  onClick={handleSubmitReview}
+                  disabled={isActionLoading}
+                  className="w-full bg-zinc-900 text-white py-4 rounded-2xl font-bold hover:bg-zinc-800 transition-all shadow-xl disabled:opacity-50"
+                >
+                  {isActionLoading ? 'Submitting...' : 'Submit Review'}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Complaint Modal */}
+      <AnimatePresence>
+        {complaintModal && (
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden"
+            >
+              <div className="p-6 border-b border-zinc-100 flex justify-between items-center bg-rose-600 text-white">
+                <div>
+                  <h3 className="font-bold text-xl">File a Complaint</h3>
+                  <p className="text-xs opacity-80">Ride ID: {complaintModal.trackingId}</p>
+                </div>
+                <button onClick={() => setComplaintModal(null)} className="p-2 hover:bg-white/10 rounded-full transition-colors">
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+              <div className="p-6 space-y-6">
+                <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl">
+                  <p className="text-xs text-rose-700 leading-relaxed">
+                    We take your safety and experience seriously. Please describe the issue in detail and our team will investigate.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Complaint Details</label>
+                  <textarea
+                    value={complaintMessage}
+                    onChange={(e) => setComplaintMessage(e.target.value)}
+                    placeholder="What went wrong? Please be as specific as possible..."
+                    className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-2xl text-sm focus:ring-2 focus:ring-rose-500 outline-none min-h-[150px] resize-none"
+                  />
+                </div>
+                <button
+                  onClick={handleSubmitComplaint}
+                  disabled={isActionLoading || !complaintMessage.trim()}
+                  className="w-full bg-rose-600 text-white py-4 rounded-2xl font-bold hover:bg-rose-500 transition-all shadow-xl disabled:opacity-50"
+                >
+                  {isActionLoading ? 'Submitting...' : 'Submit Complaint'}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {isManualRideModalOpen && (
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.9 }}
+              className="bg-white w-full max-w-lg rounded-3xl shadow-2xl overflow-hidden"
+            >
+              <div className="p-6 border-b border-zinc-100 flex justify-between items-center bg-zinc-900 text-white">
+                <div>
+                  <h3 className="font-bold text-xl tracking-tight">Manual Ride Entry</h3>
+                  <p className="text-xs opacity-60">Add a ride record directly to the database</p>
+                </div>
+                <button onClick={() => setIsManualRideModalOpen(false)} className="p-2 hover:bg-white/10 rounded-full transition-colors">
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+              <div className="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-zinc-400 ml-1">User Name</label>
+                    <input 
+                      type="text" 
+                      placeholder="e.g. John Doe"
+                      className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-xl text-sm focus:ring-2 focus:ring-zinc-900 outline-none"
+                      value={manualRideData.user_name}
+                      onChange={e => setManualRideData({...manualRideData, user_name: e.target.value})}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-zinc-400 ml-1">User Phone</label>
+                    <input 
+                      type="text" 
+                      placeholder="e.g. 9876543210"
+                      className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-xl text-sm focus:ring-2 focus:ring-zinc-900 outline-none"
+                      value={manualRideData.user_phone}
+                      onChange={e => setManualRideData({...manualRideData, user_phone: e.target.value})}
+                    />
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-zinc-400 ml-1">Pickup Location</label>
+                  <input 
+                    type="text" 
+                    placeholder="Enter pickup address"
+                    className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-xl text-sm focus:ring-2 focus:ring-zinc-900 outline-none"
+                    value={manualRideData.pickup_location}
+                    onChange={e => setManualRideData({...manualRideData, pickup_location: e.target.value})}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-zinc-400 ml-1">Dropoff Location</label>
+                  <input 
+                    type="text" 
+                    placeholder="Enter dropoff address"
+                    className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-xl text-sm focus:ring-2 focus:ring-zinc-900 outline-none"
+                    value={manualRideData.dropoff_location}
+                    onChange={e => setManualRideData({...manualRideData, dropoff_location: e.target.value})}
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-zinc-400 ml-1">Fare (₹)</label>
+                    <input 
+                      type="number" 
+                      placeholder="0.00"
+                      className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-xl text-sm focus:ring-2 focus:ring-zinc-900 outline-none"
+                      value={manualRideData.fare}
+                      onChange={e => setManualRideData({...manualRideData, fare: e.target.value})}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-zinc-400 ml-1">Distance (KM)</label>
+                    <input 
+                      type="number" 
+                      placeholder="0.0"
+                      className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-xl text-sm focus:ring-2 focus:ring-zinc-900 outline-none"
+                      value={manualRideData.distance}
+                      onChange={e => setManualRideData({...manualRideData, distance: e.target.value})}
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-zinc-400 ml-1">Trip Type</label>
+                    <select 
+                      className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-xl text-sm focus:ring-2 focus:ring-zinc-900 outline-none"
+                      value={manualRideData.trip_type}
+                      onChange={e => setManualRideData({...manualRideData, trip_type: e.target.value as any})}
+                    >
+                      <option value="single">Single Trip</option>
+                      <option value="round">Round Trip</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-zinc-400 ml-1">Status</label>
+                    <select 
+                      className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-xl text-sm focus:ring-2 focus:ring-zinc-900 outline-none"
+                      value={manualRideData.status}
+                      onChange={e => setManualRideData({...manualRideData, status: e.target.value as any})}
+                    >
+                      <option value="pending">Pending</option>
+                      <option value="accepted">Accepted</option>
+                      <option value="ongoing">Ongoing</option>
+                      <option value="completed">Completed</option>
+                      <option value="cancelled">Cancelled</option>
+                    </select>
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-zinc-400 ml-1">Assign Driver (Optional)</label>
+                  <select 
+                    className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-xl text-sm focus:ring-2 focus:ring-zinc-900 outline-none"
+                    value={manualRideData.driver_id}
+                    onChange={e => setManualRideData({...manualRideData, driver_id: e.target.value})}
+                  >
+                    <option value="">No Driver Assigned</option>
+                    {adminDrivers.map(d => (
+                      <option key={d.id} value={d.id}>{d.name} ({d.phone})</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div className="p-6 bg-zinc-50 flex gap-3">
+                <button 
+                  onClick={() => setIsManualRideModalOpen(false)}
+                  className="flex-1 px-6 py-3 bg-white border border-zinc-200 rounded-2xl text-sm font-bold hover:bg-zinc-100 transition-all"
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={handleManualAddRide}
+                  disabled={isActionLoading}
+                  className="flex-1 px-6 py-3 bg-zinc-900 text-white rounded-2xl text-sm font-bold hover:bg-zinc-800 transition-all shadow-lg disabled:opacity-50"
+                >
+                  {isActionLoading ? 'Adding...' : 'Add Ride Record'}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* Toast Notification */}
       <AnimatePresence>

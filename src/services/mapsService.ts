@@ -13,9 +13,27 @@ export interface FareOption {
   description: string;
 }
 
-export async function calculateRealFare(pickup: string, dropoff: string, tripType: 'single' | 'round', manualDistance?: number) {
+export async function calculateRealFare(
+  pickup: string, 
+  dropoff: string, 
+  tripType: 'single' | 'round', 
+  manualDistance?: number,
+  consecutiveCancellations: number = 0
+) {
   const calculateOptions = (distanceKm: number) => {
-    const multiplier = tripType === 'round' ? (2 * 0.90) : 1;
+    const baseMultiplier = tripType === 'round' ? (2 * 0.90) : 1;
+    
+    // Cancellation Penalty: 2% for each consecutive cancellation
+    const penaltyMultiplier = 1 + (consecutiveCancellations * 0.02);
+    
+    // Round Trip Discount: 1% for every 140km if distance >= 140km
+    // But ONLY if there are NO cancellations
+    let discountMultiplier = 1;
+    if (tripType === 'round' && distanceKm >= 140 && consecutiveCancellations === 0) {
+      const discountPercent = Math.floor(distanceKm / 140) * 0.01;
+      discountMultiplier = 1 - discountPercent;
+    }
+
     return Object.entries(VEHICLE_RATES).map(([type, rates]) => {
       let currentPerKm = rates.perKm;
       
@@ -26,9 +44,12 @@ export async function calculateRealFare(pickup: string, dropoff: string, tripTyp
         }
       }
 
+      const baseFare = (rates.base + (distanceKm * currentPerKm)) * baseMultiplier;
+      const finalFare = baseFare * penaltyMultiplier * discountMultiplier;
+
       return {
         type,
-        fare: Math.round((rates.base + (distanceKm * currentPerKm)) * multiplier),
+        fare: Math.round(finalFare),
         description: rates.description
       };
     });
