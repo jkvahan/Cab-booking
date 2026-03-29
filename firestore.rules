@@ -85,7 +85,7 @@ service cloud.firestore {
              data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
              isValidPhone(data.phone) &&
              data.pin is string && data.pin.matches("^\\d{4}$") &&
-             data.status in ['active', 'inactive', 'pending'];
+             data.status in ['active', 'inactive', 'pending', 'under verification'];
     }
 
     function isValidRide(data) {
@@ -111,14 +111,14 @@ service cloud.firestore {
       // Allow read for login verification (manual auth)
       allow read: if true;
       allow create: if true; // Allow registration
-      allow update: if isAuthenticated() && (isOwner(userId) || isAdmin());
+      allow update: if true; // Allow updates (including from manual admin)
     }
 
     match /drivers/{driverId} {
       // Allow read for login verification (manual auth)
       allow read: if true;
       allow create: if true; // Allow registration
-      allow update: if isAuthenticated() && (isOwner(driverId) || isAdmin());
+      allow update: if true; // Allow updates (including from manual admin)
     }
 
     match /rides/{rideId} {

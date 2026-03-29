@@ -1064,8 +1064,17 @@ export default function App() {
   };
 
   const handleWalletAdjust = async (driverId: string, amount: number, type: 'credit' | 'debit') => {
+    if (isNaN(amount) || amount <= 0) {
+      setToast({ message: 'Please enter a valid amount', type: 'error' });
+      return;
+    }
+
     const reason = prompt(`Enter reason for ${type}:`);
     if (reason === null) return;
+    if (reason.trim() === '') {
+      setToast({ message: 'Reason is required', type: 'error' });
+      return;
+    }
 
     try {
       const driverRef = doc(db, 'drivers', driverId);
@@ -1601,22 +1610,25 @@ export default function App() {
         });
 
         // Update driver wallet (Deduct 10% fare as commission)
-        const driverRef = doc(db, 'drivers', user.id);
-        const driverSnap = await getDoc(driverRef);
-        if (driverSnap.exists()) {
-          const fare = rideData.fare || 0;
-          const commission = fare * 0.1;
-          const newBalance = (driverSnap.data().wallet_balance || 0) - commission;
-          await updateDoc(driverRef, { wallet_balance: newBalance });
-          
-          // Add transaction
-          await addDoc(collection(db, 'transactions'), {
-            driver_id: user.id,
-            amount: commission,
-            type: 'debit',
-            description: `Ride completed: ${rideId} (10% Commission Deducted)`,
-            created_at: new Date().toISOString()
-          });
+        const driverId = rideData.driver_id;
+        if (driverId) {
+          const driverRef = doc(db, 'drivers', driverId);
+          const driverSnap = await getDoc(driverRef);
+          if (driverSnap.exists()) {
+            const fare = rideData.fare || 0;
+            const commission = fare * 0.1;
+            const newBalance = (driverSnap.data().wallet_balance || 0) - commission;
+            await updateDoc(driverRef, { wallet_balance: newBalance });
+            
+            // Add transaction
+            await addDoc(collection(db, 'transactions'), {
+              driver_id: driverId,
+              amount: commission,
+              type: 'debit',
+              description: `Ride completed: ${rideData.tracking_id || rideId} (10% Commission Deducted)`,
+              created_at: new Date().toISOString()
+            });
+          }
         }
 
         setOtpInput('');
@@ -2811,11 +2823,25 @@ export default function App() {
                                 <div className="flex gap-1 mt-1">
                                   <button onClick={() => {
                                     const amt = prompt('Enter amount to add:');
-                                    if (amt) handleWalletAdjust(driver.id, parseFloat(amt), 'credit');
+                                    if (amt !== null && amt !== '') {
+                                      const parsed = parseFloat(amt);
+                                      if (!isNaN(parsed)) {
+                                        handleWalletAdjust(driver.id, parsed, 'credit');
+                                      } else {
+                                        setToast({ message: 'Invalid amount', type: 'error' });
+                                      }
+                                    }
                                   }} className="text-[10px] bg-emerald-50 text-emerald-600 px-1.5 py-0.5 rounded border border-emerald-100 font-bold">Add</button>
                                   <button onClick={() => {
                                     const amt = prompt('Enter amount to deduct:');
-                                    if (amt) handleWalletAdjust(driver.id, parseFloat(amt), 'debit');
+                                    if (amt !== null && amt !== '') {
+                                      const parsed = parseFloat(amt);
+                                      if (!isNaN(parsed)) {
+                                        handleWalletAdjust(driver.id, parsed, 'debit');
+                                      } else {
+                                        setToast({ message: 'Invalid amount', type: 'error' });
+                                      }
+                                    }
                                   }} className="text-[10px] bg-rose-50 text-rose-600 px-1.5 py-0.5 rounded border border-rose-100 font-bold">Deduct</button>
                                   <button onClick={() => fetchDriverTransactions(driver.id, driver.name)} className="text-[10px] bg-zinc-50 text-zinc-600 px-1.5 py-0.5 rounded border border-zinc-100 font-bold">History</button>
                                 </div>
