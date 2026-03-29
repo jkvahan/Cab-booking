@@ -6,13 +6,13 @@ service cloud.firestore {
     // ===============================================================
     //
     // Collection: admins
-    // Fields: username, password, pin, role
+    // Fields: username, password, pin, role, permissions
     //
     // Collection: users
-    // Fields: name, phone, password, created_at
+    // Fields: name, phone, created_at, role
     //
     // Collection: drivers
-    // Fields: name, phone, password, status, wallet_balance, is_online
+    // Fields: name, phone, pin, status, wallet_balance, is_online, role
     //
     // Collection: vehicles
     // Fields: driver_id, model, plate_number, type
@@ -38,29 +38,36 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    // Since the app uses a custom auth system, we'll allow limited public access
-    // for login and registration, but we should warn the user to use Firebase Auth.
-    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
     function isAdmin() {
       return isAuthenticated() &&
         (get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role in ['admin', 'owner'] ||
-          (request.auth.token.email == "digitalserviceindia84@gmail.com" && request.auth.token.email_verified == true));
+          (request.auth.token.email == "digitalserviceindia84@gmail.com"));
     }
 
-    function isOwner() {
+    function isPlatformOwner() {
       return isAuthenticated() &&
         (get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'owner' ||
-          (request.auth.token.email == "digitalserviceindia84@gmail.com" && request.auth.token.email_verified == true));
+          (request.auth.token.email == "digitalserviceindia84@gmail.com"));
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
     }
 
     function hasOnlyAllowedFields(fields) {
       return request.resource.data.keys().hasOnly(fields);
     }
 
-    function validStringLength(field, minLen, maxLen) {
-      return request.resource.data[field] is string &&
-        request.resource.data[field].size() >= minLen &&
-        request.resource.data[field].size() <= maxLen;
+    function areImmutableFieldsUnchanged(fields) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
+    }
+
+    function isValidPhone(phone) {
+      return phone is string && phone.size() >= 10 && phone.size() <= 15;
     }
 
     // ===============================================================
@@ -68,41 +75,26 @@ service cloud.firestore {
     // ===============================================================
 
     function isValidUser(data) {
-      return data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
-             data.phone is string && data.phone.size() >= 10 && data.phone.size() <= 15 &&
-             data.password is string && data.password.size() > 0;
+      return hasRequiredFields(['name', 'phone']) &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             isValidPhone(data.phone);
     }
 
     function isValidDriver(data) {
-      return data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
-             data.phone is string && data.phone.size() >= 10 && data.phone.size() <= 15 &&
-             data.password is string && data.password.size() > 0 &&
+      return hasRequiredFields(['name', 'phone', 'pin', 'status']) &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             isValidPhone(data.phone) &&
+             data.pin is string && data.pin.matches("^\\d{4}$") &&
              data.status in ['active', 'inactive', 'pending'];
     }
 
     function isValidRide(data) {
-      return data.tracking_id is string &&
-             data.pickup_location is string &&
-             data.dropoff_location is string &&
+      return hasRequiredFields(['tracking_id', 'pickup_location', 'dropoff_location', 'status', 'fare']) &&
+             data.tracking_id is string &&
+             data.pickup_location is string && data.pickup_location.size() < 500 &&
+             data.dropoff_location is string && data.dropoff_location.size() < 500 &&
              data.status in ['pending', 'accepted', 'ongoing', 'completed', 'cancelled'] &&
-             data.fare is number &&
-             (!('pickup_date' in data) || data.pickup_date is string) &&
-             (!('pickup_time' in data) || data.pickup_time is string);
-    }
-
-    function isValidAdmin(data) {
-      return data.username is string && data.username.size() > 0 &&
-             data.password is string && data.password.size() > 0 &&
-             data.pin is string && data.pin.matches("^\\d{4}$") &&
-             data.role in ['admin', 'owner'];
-    }
-
-    function isValidNotification(data) {
-      return data.message is string && data.message.size() > 0 && data.message.size() < 1000 &&
-             data.target in ['all_drivers', 'all_users', 'specific_driver'] &&
-             (!('driver_id' in data) || data.driver_id is string) &&
-             data.created_at is string &&
-             data.read_by is list;
+             data.fare is number && data.fare >= 0;
     }
 
     // ===============================================================
@@ -110,36 +102,51 @@ service cloud.firestore {
     // ===============================================================
 
     match /admins/{adminId} {
-      // Allow read for login and management
-      allow read, write: if true;
+      // Allow read for login verification (manual auth)
+      allow read: if true;
+      allow write: if true; // Permissive for manual auth mode as requested
     }
 
     match /users/{userId} {
-      allow read, write: if true;
+      // Allow read for login verification (manual auth)
+      allow read: if true;
+      allow create: if true; // Allow registration
+      allow update: if isAuthenticated() && (isOwner(userId) || isAdmin());
     }
 
     match /drivers/{driverId} {
-      allow read, write: if true;
-    }
-
-    match /vehicles/{vehicleId} {
-      allow read, write: if true;
+      // Allow read for login verification (manual auth)
+      allow read: if true;
+      allow create: if true; // Allow registration
+      allow update: if isAuthenticated() && (isOwner(driverId) || isAdmin());
     }
 
     match /rides/{rideId} {
-      allow read, write: if true;
+      // Permissive read for manual auth mode
+      allow read: if true;
+      allow create: if isValidRide(request.resource.data);
+      allow update: if isValidRide(request.resource.data);
     }
 
     match /transactions/{transactionId} {
-      allow read, write: if true;
+      allow read: if true;
+      allow create: if true;
     }
 
     match /withdrawal_requests/{requestId} {
-      allow read, write: if true;
+      allow read: if true;
+      allow create: if true;
+      allow update: if true;
     }
 
     match /notifications/{notificationId} {
-      allow read, write: if true;
+      allow read: if true;
+      allow write: if true;
+    }
+
+    match /vehicles/{vehicleId} {
+      allow read: if true;
+      allow write: if true;
     }
 
     // Default deny

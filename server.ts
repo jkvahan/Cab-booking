@@ -3,7 +3,6 @@ import { createServer } from "http";
 import { Server as SocketServer } from "socket.io";
 import { createServer as createViteServer } from "vite";
 import path from "path";
-import nodemailer from "nodemailer";
 import twilio from "twilio";
 import dotenv from "dotenv";
 
@@ -26,35 +25,16 @@ async function startServer() {
   app.use(express.json());
 
   // Notification Service
-  const transporter = nodemailer.createTransport({
-    service: process.env.EMAIL_SERVICE || "gmail",
-    auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASS,
-    },
-  });
-
   const twilioClient = process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN 
     ? twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN)
     : null;
 
   app.post("/api/notify", async (req, res) => {
     const { type, data } = req.body;
-    const { userEmail, driverEmail, adminEmail, message, phone } = data;
+    const { message, phone } = data;
 
     try {
-      // 1. Send Emails
-      const recipients = [userEmail, driverEmail, adminEmail].filter(Boolean);
-      if (recipients.length > 0 && process.env.EMAIL_USER) {
-        await transporter.sendMail({
-          from: process.env.EMAIL_USER,
-          to: recipients.join(", "),
-          subject: `JK Vahan Ride Update: ${type}`,
-          text: message,
-        });
-      }
-
-      // 2. Send WhatsApp (via Twilio)
+      // 1. Send WhatsApp (via Twilio)
       if (twilioClient && process.env.TWILIO_WHATSAPP_NUMBER) {
         // Send to Admin
         if (process.env.ADMIN_WHATSAPP_NUMBER) {

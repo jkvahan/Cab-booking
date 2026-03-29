@@ -21,7 +21,16 @@
 }
 
 @layer utilities {
-  .glass {
+  /* Global reCAPTCHA container */
+#recaptcha-container-global {
+  position: fixed;
+  bottom: 0;
+  right: 0;
+  z-index: -1;
+  pointer-events: none;
+}
+
+.glass {
     @apply bg-white/70 backdrop-blur-xl border border-white/20 shadow-3d;
   }
   .glass-dark {

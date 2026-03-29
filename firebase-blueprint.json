@@ -8,7 +8,17 @@
         "username": { "type": "string" },
         "password": { "type": "string" },
         "pin": { "type": "string" },
-        "role": { "type": "string", "enum": ["owner", "admin"] }
+        "role": { "type": "string", "enum": ["owner", "admin"] },
+        "permissions": {
+          "type": "object",
+          "properties": {
+            "rides": { "type": "boolean" },
+            "drivers": { "type": "boolean" },
+            "users": { "type": "boolean" },
+            "withdrawals": { "type": "boolean" },
+            "notifications": { "type": "boolean" }
+          }
+        }
       },
       "required": ["username", "password", "pin", "role"]
     },
@@ -19,10 +29,12 @@
       "properties": {
         "name": { "type": "string" },
         "phone": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
         "password": { "type": "string" },
-        "created_at": { "type": "string", "format": "date-time" }
+        "created_at": { "type": "string", "format": "date-time" },
+        "role": { "type": "string", "enum": ["user"] }
       },
-      "required": ["name", "phone", "password"]
+      "required": ["name", "phone", "email", "password"]
     },
     "Driver": {
       "title": "Driver",
@@ -31,13 +43,15 @@
       "properties": {
         "name": { "type": "string" },
         "phone": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
         "password": { "type": "string" },
         "pin": { "type": "string" },
-        "status": { "type": "string", "enum": ["active", "inactive"] },
+        "status": { "type": "string", "enum": ["active", "inactive", "pending"] },
         "wallet_balance": { "type": "number" },
-        "is_online": { "type": "boolean" }
+        "is_online": { "type": "boolean" },
+        "role": { "type": "string", "enum": ["driver"] }
       },
-      "required": ["name", "phone", "password", "status"]
+      "required": ["name", "phone", "email", "password", "status"]
     },
     "Vehicle": {
       "title": "Vehicle",
@@ -70,6 +84,8 @@
         "user_id": { "type": "string" },
         "user_name": { "type": "string" },
         "user_phone": { "type": "string" },
+        "user_email": { "type": "string", "format": "email" },
+        "driver_email": { "type": "string", "format": "email" },
         "trip_type": { "type": "string", "enum": ["single", "round"] },
         "distance": { "type": "number" },
         "pickup_date": { "type": "string" },

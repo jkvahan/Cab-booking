@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Car, 
   MapPin, 
@@ -23,7 +23,8 @@ import {
   Send,
   Phone,
   Lock,
-  IndianRupee
+  IndianRupee,
+  AlertCircle
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -40,23 +41,16 @@ import {
   serverTimestamp,
   getDocFromServer,
   limit,
-  arrayUnion
+  arrayUnion,
+  setDoc
 } from 'firebase/firestore';
 import { 
   signInWithPopup, 
   GoogleAuthProvider, 
   onAuthStateChanged, 
-  signOut,
-  createUserWithEmailAndPassword,
-  signInWithEmailAndPassword,
-  setPersistence,
-  browserSessionPersistence
+  signOut
 } from 'firebase/auth';
 import { db, auth } from './firebase';
-import { estimateFare } from './services/geminiService';
-import { calculateRealFare, VEHICLE_RATES } from './services/mapsService';
-import MapComponent from './components/Map';
-import { io } from "socket.io-client";
 
 // --- Types ---
 enum OperationType {
@@ -86,6 +80,83 @@ interface FirestoreErrorInfo {
     }[];
   }
 }
+
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData.map(provider => ({
+        providerId: provider.providerId,
+        displayName: provider.displayName,
+        email: provider.email,
+        photoUrl: provider.photoURL
+      })) || []
+    },
+    operationType,
+    path
+  }
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
+
+// Error Boundary Component
+class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean, error: any }> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: any) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: any, errorInfo: any) {
+    console.error("Uncaught error:", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      let errorMessage = "Something went wrong.";
+      try {
+        const parsed = JSON.parse(this.state.error.message);
+        if (parsed.error) errorMessage = parsed.error;
+      } catch (e) {
+        errorMessage = this.state.error.message || errorMessage;
+      }
+
+      return (
+        <div className="min-h-screen bg-zinc-50 flex items-center justify-center p-6">
+          <div className="max-w-md w-full glass p-8 rounded-3xl text-center space-y-6 shadow-2xl">
+            <div className="w-20 h-20 bg-rose-100 rounded-full flex items-center justify-center mx-auto">
+              <X className="w-10 h-10 text-rose-600" />
+            </div>
+            <h2 className="text-2xl font-black text-zinc-900">Application Error</h2>
+            <p className="text-zinc-600 leading-relaxed">{errorMessage}</p>
+            <button 
+              onClick={() => window.location.reload()}
+              className="w-full bg-zinc-900 text-white py-4 rounded-2xl font-bold hover:bg-zinc-800 transition-all"
+            >
+              Reload Application
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
+import { estimateFare } from './services/geminiService';
+import { calculateRealFare, VEHICLE_RATES } from './services/mapsService';
+import MapComponent from './components/Map';
+import { io } from "socket.io-client";
+
 
 async function triggerPushNotification(title: string, body: string) {
   if (!("Notification" in window)) return;
@@ -135,28 +206,6 @@ socket.on("notification", ({ type, data }) => {
   triggerPushNotification(`JK Vahan: ${type.replace(/_/g, ' ')}`, data.message);
 });
 
-function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
-  const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
-    authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-      tenantId: auth.currentUser?.tenantId,
-      providerInfo: auth.currentUser?.providerData.map(provider => ({
-        providerId: provider.providerId,
-        displayName: provider.displayName,
-        email: provider.email,
-        photoUrl: provider.photoURL
-      })) || []
-    },
-    operationType,
-    path
-  }
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
-}
 type View = 'user' | 'admin' | 'driver';
 type RideStatus = 'pending' | 'accepted' | 'ongoing' | 'completed' | 'cancelled';
 
@@ -184,6 +233,21 @@ interface Ride {
   distance?: number;
   pickup_date?: string;
   pickup_time?: string;
+}
+
+interface AdminUser {
+  id: string;
+  username: string;
+  password?: string;
+  pin?: string;
+  role: 'owner' | 'admin';
+  permissions?: {
+    rides: boolean;
+    drivers: boolean;
+    users: boolean;
+    withdrawals: boolean;
+    notifications: boolean;
+  };
 }
 
 interface Notification {
@@ -275,6 +339,7 @@ export default function App() {
     setView('user');
     setTrackedRide(null);
     setTrackingId('');
+    localStorage.removeItem('vahan_user');
     signOut(auth);
   };
   const getStatusLabel = (status: RideStatus) => {
@@ -302,54 +367,62 @@ export default function App() {
   const [isAuthReady, setIsAuthReady] = useState(false);
 
   useEffect(() => {
-    // Set persistence to session only (auto logout on tab/browser close)
-    setPersistence(auth, browserSessionPersistence).catch(err => {
-      console.error("Persistence error:", err);
-    });
+    // Test Firestore connection
+    const testConnection = async () => {
+      try {
+        await getDocFromServer(doc(db, 'test', 'connection'));
+      } catch (error) {
+        if (error instanceof Error && error.message.includes('the client is offline')) {
+          console.error("Please check your Firebase configuration. The client is offline.");
+          setToast({ message: 'Firebase connection error. Please check your internet.', type: 'error' });
+        }
+      }
+    };
+    testConnection();
+
+    // Check for saved manual session first
+    const savedUser = localStorage.getItem('vahan_user');
+    if (savedUser) {
+      try {
+        setUser(JSON.parse(savedUser));
+      } catch (e) {
+        localStorage.removeItem('vahan_user');
+      }
+    }
 
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
-        // If logged in via Firebase Auth, fetch profile from Firestore
+        // If logged in via Google, fetch profile
         try {
-          // Check users, drivers, admins collections
           const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
           if (userDoc.exists()) {
-            setUser({ ...userDoc.data(), id: firebaseUser.uid, role: 'user' });
+            const userData = { ...userDoc.data(), id: firebaseUser.uid, role: 'user' };
+            setUser(userData);
+            localStorage.setItem('vahan_user', JSON.stringify(userData));
           } else {
             const driverDoc = await getDoc(doc(db, 'drivers', firebaseUser.uid));
             if (driverDoc.exists()) {
-              setUser({ ...driverDoc.data(), id: firebaseUser.uid, role: 'driver' });
+              const driverData = { ...driverDoc.data(), id: firebaseUser.uid, role: 'driver' };
+              setUser(driverData);
+              localStorage.setItem('vahan_user', JSON.stringify(driverData));
             } else {
               const adminDoc = await getDoc(doc(db, 'admins', firebaseUser.uid));
               if (adminDoc.exists()) {
-                setUser({ ...adminDoc.data(), id: firebaseUser.uid, role: 'admin' });
+                const adminData = { ...adminDoc.data(), id: firebaseUser.uid, role: 'admin' };
+                setUser(adminData);
+                localStorage.setItem('vahan_user', JSON.stringify(adminData));
               }
             }
           }
         } catch (err) {
-          console.error("Error fetching user profile:", err);
+          console.error("Error fetching Google user profile:", err);
         }
-      } else {
-        // If not logged in via Firebase Auth, check localStorage for legacy/manual sessions
-        // (Optional: migrate legacy users to Firebase Auth on first login)
       }
       setIsAuthReady(true);
     });
     return () => unsubscribe();
   }, []);
 
-  useEffect(() => {
-    const testConnection = async () => {
-      try {
-        await getDocFromServer(doc(db, 'test', 'connection'));
-      } catch (error) {
-        if (error instanceof Error && error.message.includes('the client is offline')) {
-          console.error("Please check your Firebase configuration. ");
-        }
-      }
-    };
-    testConnection();
-  }, []);
   const [view, setView] = useState<View>('user');
 
   useEffect(() => {
@@ -382,19 +455,16 @@ export default function App() {
 
   // User Auth States
   const [userAuthMode, setUserAuthMode] = useState<'login' | 'register'>('login');
-  const [userLoginData, setUserLoginData] = useState({ phone: '', password: '', name: '' });
+  const [userLoginData, setUserLoginData] = useState({ phone: '', name: '', password: '' });
   const [myRides, setMyRides] = useState<Ride[]>([]);
+  const [isVerifying, setIsVerifying] = useState(false);
 
   // Driver Auth States
   const [driverAuthMode, setDriverAuthMode] = useState<'login' | 'register'>('login');
   const [driverLoginStep, setDriverLoginStep] = useState<'credentials' | 'pin'>('credentials');
-  const [tempDriverId, setTempDriverId] = useState<string | null>(null);
+  const [loginData, setLoginData] = useState({ phone: '', name: '', pin: '', username: '', password: '' });
   const [driverPin, setDriverPin] = useState('');
-  const [loginData, setLoginData] = useState({ username: '', phone: '', password: '', name: '', pin: '' });
-
-  // Forgot Password States
-  const [forgotPasswordMode, setForgotPasswordMode] = useState(false);
-  const [forgotPasswordData, setForgotPasswordData] = useState({ identifier: '', newPassword: '' });
+  const [tempDriverId, setTempDriverId] = useState<string | null>(null);
 
   // Admin Data
   const [adminLoginStep, setAdminLoginStep] = useState<'credentials' | 'pin'>('credentials');
@@ -413,11 +483,26 @@ export default function App() {
   const [adminDrivers, setAdminDrivers] = useState<any[]>([]);
   const [adminUsers, setAdminUsers] = useState<any[]>([]);
   const [adminVehicles, setAdminVehicles] = useState<any[]>([]);
-  const [otherAdmins, setOtherAdmins] = useState<any[]>([]);
+  const [otherAdmins, setOtherAdmins] = useState<AdminUser[]>([]);
   const [adminWithdrawals, setAdminWithdrawals] = useState<any[]>([]);
   const [selectedDriverTransactions, setSelectedDriverTransactions] = useState<{name: string, transactions: any[]} | null>(null);
-  const [newAdmin, setNewAdmin] = useState({ username: '', password: '', pin: '', role: 'admin' as 'admin' | 'owner' });
+  const [newAdmin, setNewAdmin] = useState({ 
+    username: '', 
+    password: '', 
+    pin: '', 
+    role: 'admin' as 'admin' | 'owner',
+    permissions: {
+      rides: true,
+      drivers: true,
+      users: true,
+      withdrawals: true,
+      notifications: true
+    }
+  });
   const [changeCreds, setChangeCreds] = useState({ password: '', pin: '' });
+  const [editingAdmin, setEditingAdmin] = useState<AdminUser | any | null>(null);
+  const [editingUser, setEditingUser] = useState<any | null>(null);
+  const [editingDriver, setEditingDriver] = useState<any | null>(null);
 
   // Driver Data
   const [availableRides, setAvailableRides] = useState<Ride[]>([]);
@@ -429,37 +514,11 @@ export default function App() {
   const [acceptingRideId, setAcceptingRideId] = useState<string | null>(null);
   const [isActionLoading, setIsActionLoading] = useState(false);
   const [toast, setToast] = useState<{ message: string, type: 'success' | 'error' } | null>(null);
+  const [confirmModal, setConfirmModal] = useState<{ message: string, onConfirm: () => void } | null>(null);
   const [isAudioUnlocked, setIsAudioUnlocked] = useState(false);
   const [pickupCoords, setPickupCoords] = useState<{ lat: number, lng: number } | null>(null);
   const [dropoffCoords, setDropoffCoords] = useState<{ lat: number, lng: number } | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-
-  useEffect(() => {
-    const bootstrapOwner = async () => {
-      try {
-        const q = query(collection(db, 'admins'), where('username', '==', 'Shafiq Choudhary'), limit(1));
-        const snapshot = await getDocs(q);
-        if (snapshot.empty) {
-          await addDoc(collection(db, 'admins'), {
-            username: 'Shafiq Choudhary',
-            password: '2003',
-            pin: '2003',
-            role: 'owner',
-            created_at: new Date().toISOString()
-          });
-        } else {
-          // Reset owner credentials if they were changed and owner is having trouble logging in
-          const ownerDoc = snapshot.docs[0];
-          if (ownerDoc.data().password !== '2003' || ownerDoc.data().pin !== '2003') {
-            await updateDoc(doc(db, 'admins', ownerDoc.id), { password: '2003', pin: '2003' });
-          }
-        }
-      } catch (err) {
-        console.error("Bootstrap error:", err);
-      }
-    };
-    bootstrapOwner();
-  }, []);
 
   useEffect(() => {
     // Preload notification sound
@@ -514,6 +573,24 @@ export default function App() {
       initAutocomplete();
     }
   }, []);
+
+  // User document listener to keep status updated
+  useEffect(() => {
+    if (!user?.id || !isAuthReady) return;
+    
+    const collectionName = user.role === 'admin' || user.role === 'owner' ? 'admins' : 
+                          user.role === 'driver' ? 'drivers' : 'users';
+    
+    const unsubscribe = onSnapshot(doc(db, collectionName, user.id), (snapshot) => {
+      if (snapshot.exists()) {
+        const updatedUser = { ...snapshot.data(), id: snapshot.id, role: user.role };
+        setUser(updatedUser);
+        localStorage.setItem('vahan_user', JSON.stringify(updatedUser));
+      }
+    });
+
+    return () => unsubscribe();
+  }, [user?.id, isAuthReady]);
 
   // WebSocket Connection
   const unlockAudio = () => {
@@ -685,7 +762,7 @@ export default function App() {
       // Only owner can see other admins
       if (user.role === 'owner') {
         unsubscribeAdmins = onSnapshot(collection(db, 'admins'), (snapshot) => {
-          const admins = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id }));
+          const admins = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as AdminUser));
           setOtherAdmins(admins);
         }, (err) => handleFirestoreError(err, OperationType.LIST, 'admins'));
       }
@@ -707,8 +784,63 @@ export default function App() {
 
   const fetchUserRides = () => {};
 
+  const handleGoogleLogin = async (targetRole: 'user' | 'driver' = 'user') => {
+    setError('');
+    try {
+      const provider = new GoogleAuthProvider();
+      const result = await signInWithPopup(auth, provider);
+      const firebaseUser = result.user;
+      
+      // Check if user exists in any collection
+      const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
+      if (userDoc.exists()) {
+        setUser({ ...userDoc.data(), id: firebaseUser.uid, role: 'user' });
+      } else {
+        const driverDoc = await getDoc(doc(db, 'drivers', firebaseUser.uid));
+        if (driverDoc.exists()) {
+          setUser({ ...driverDoc.data(), id: firebaseUser.uid, role: 'driver' });
+        } else {
+          const adminDoc = await getDoc(doc(db, 'admins', firebaseUser.uid));
+          if (adminDoc.exists()) {
+            setUser({ ...adminDoc.data(), id: firebaseUser.uid, role: 'admin' });
+          } else {
+            // New account via Google: Use the targetRole
+            const collectionName = targetRole === 'driver' ? 'drivers' : 'users';
+            const data = targetRole === 'driver' ? {
+              name: firebaseUser.displayName || 'Google Driver',
+              phone: firebaseUser.phoneNumber || '',
+              email: firebaseUser.email || '',
+              wallet_balance: 0,
+              status: 'pending',
+              created_at: new Date().toISOString(),
+              role: 'driver'
+            } : {
+              name: firebaseUser.displayName || 'Google User',
+              phone: firebaseUser.phoneNumber || '',
+              email: firebaseUser.email || '',
+              created_at: new Date().toISOString(),
+              role: 'user'
+            };
+            await setDoc(doc(db, collectionName, firebaseUser.uid), data);
+            setUser({ ...data, id: firebaseUser.uid });
+          }
+        }
+      }
+      setToast({ message: 'Login successful!', type: 'success' });
+    } catch (err: any) {
+      console.error("Google Login Error:", err);
+      if (err.code === 'auth/operation-not-allowed') {
+        setError('Google Login is not enabled in Firebase Console. Please enable it under Authentication > Sign-in method.');
+      } else {
+        setError(err.message || 'Google Login failed');
+      }
+    }
+  };
+
   const handleUserLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError('');
+    setIsVerifying(true);
     try {
       const q = query(
         collection(db, 'users'), 
@@ -720,65 +852,135 @@ export default function App() {
       if (!snapshot.empty) {
         const userData = { ...snapshot.docs[0].data(), id: snapshot.docs[0].id, role: 'user' };
         setUser(userData);
-        setView('user');
-        setError('');
+        localStorage.setItem('vahan_user', JSON.stringify(userData));
+        setToast({ message: 'Login successful!', type: 'success' });
       } else {
-        setError('Invalid user credentials');
+        setError('Invalid phone number or password');
       }
     } catch (err: any) {
+      console.error("User Login Error:", err);
       setError(err.message || 'Login failed');
+    } finally {
+      setIsVerifying(false);
     }
   };
 
   const handleUserRegister = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!userLoginData.name || !userLoginData.phone || !userLoginData.password) {
+      setError('Please fill all fields');
+      return;
+    }
+    setError('');
+    setIsVerifying(true);
     try {
-      // Check if user exists
-      const q = query(collection(db, 'users'), where('phone', '==', userLoginData.phone));
+      // Check if phone exists
+      const q = query(collection(db, 'users'), where('phone', '==', userLoginData.phone), limit(1));
       const snapshot = await getDocs(q);
       if (!snapshot.empty) {
         setError('User with this phone already exists');
         return;
       }
 
-      const userData = {
+      const data = {
         name: userLoginData.name,
         phone: userLoginData.phone,
         password: userLoginData.password,
-        created_at: new Date().toISOString()
+        created_at: new Date().toISOString(),
+        role: 'user'
       };
-      const docRef = await addDoc(collection(db, 'users'), userData);
-      setUserAuthMode('login');
-      setError('Registration successful! Please login.');
+
+      const docRef = await addDoc(collection(db, 'users'), data);
+      const userData = { ...data, id: docRef.id };
+      setUser(userData);
+      localStorage.setItem('vahan_user', JSON.stringify(userData));
+      setToast({ message: 'Registration successful!', type: 'success' });
     } catch (err: any) {
+      console.error("User Registration Error:", err);
       setError(err.message || 'Registration failed');
+    } finally {
+      setIsVerifying(false);
     }
   };
 
   const handleUserCancelRide = async (rideId: string) => {
-    if (!confirm("Are you sure you want to cancel this ride?")) return;
-    try {
-      const rideRef = doc(db, 'rides', rideId);
-      const rideSnap = await getDoc(rideRef);
-      const rideData = rideSnap.data();
-      
-      await updateDoc(rideRef, { status: 'cancelled' });
+    setConfirmModal({
+      message: "Are you sure you want to cancel this ride?",
+      onConfirm: async () => {
+        try {
+          const rideRef = doc(db, 'rides', rideId);
+          const rideSnap = await getDoc(rideRef);
+          const rideData = rideSnap.data();
+          
+          await updateDoc(rideRef, { status: 'cancelled' });
 
-      // Send Notifications
-      sendNotification('RIDE_CANCELLED', {
-        userEmail: rideData?.user_email,
-        driverEmail: rideData?.driver_email,
-        adminEmail: 'digitalserviceindia84@gmail.com',
-        message: `Ride ${rideData?.tracking_id} has been cancelled by the user.`,
-        phone: rideData?.user_phone
-      });
-    } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `rides/${rideId}`);
-    }
+          // Send Notifications
+          sendNotification('RIDE_CANCELLED', {
+            message: `Ride ${rideData?.tracking_id} has been cancelled by the user.`,
+            phone: rideData?.user_phone
+          });
+          setToast({ message: "Ride Cancelled", type: 'success' });
+        } catch (err) {
+          handleFirestoreError(err, OperationType.UPDATE, `rides/${rideId}`);
+        }
+      }
+    });
   };
 
   const fetchAdminData = () => {};
   const fetchOtherAdmins = () => {};
+
+  const handleUpdateAdmin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingAdmin) return;
+    try {
+      const adminRef = doc(db, 'admins', editingAdmin.id);
+      await updateDoc(adminRef, {
+        username: editingAdmin.username,
+        password: editingAdmin.password,
+        pin: editingAdmin.pin,
+        permissions: editingAdmin.permissions
+      });
+      setToast({ message: "Admin Updated", type: 'success' });
+      setEditingAdmin(null);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `admins/${editingAdmin.id}`);
+    }
+  };
+
+  const handleUpdateUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingUser) return;
+    try {
+      const userRef = doc(db, 'users', editingUser.id);
+      await updateDoc(userRef, {
+        name: editingUser.name,
+        phone: editingUser.phone,
+        password: editingUser.password
+      });
+      setToast({ message: "User Updated", type: 'success' });
+      setEditingUser(null);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `users/${editingUser.id}`);
+    }
+  };
+
+  const handleUpdateDriver = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingDriver) return;
+    try {
+      const driverRef = doc(db, 'drivers', editingDriver.id);
+      await updateDoc(driverRef, {
+        name: editingDriver.name,
+        phone: editingDriver.phone,
+        password: editingDriver.password
+      });
+      setToast({ message: "Driver Updated", type: 'success' });
+      setEditingDriver(null);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `drivers/${editingDriver.id}`);
+    }
+  };
 
   const handleAddAdmin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -796,9 +998,22 @@ export default function App() {
         password: newAdmin.password,
         pin: newAdmin.pin,
         role: 'admin', // Force admin role
+        permissions: newAdmin.permissions,
         created_at: new Date().toISOString()
       });
-      setNewAdmin({ username: '', password: '', pin: '', role: 'admin' });
+      setNewAdmin({ 
+        username: '', 
+        password: '', 
+        pin: '', 
+        role: 'admin',
+        permissions: {
+          rides: true,
+          drivers: true,
+          users: true,
+          withdrawals: true,
+          notifications: true
+        }
+      });
     } catch (err) {
       handleFirestoreError(err, OperationType.CREATE, 'admins');
     }
@@ -938,7 +1153,7 @@ export default function App() {
     try {
       await addDoc(collection(db, 'withdrawal_requests'), {
         driver_id: user.id,
-        driver_name: user.name,
+        driver_name: user.name || user.username || 'Driver',
         amount,
         bank_details: bankDetails,
         status: 'pending',
@@ -990,8 +1205,13 @@ export default function App() {
         if (!tempAdminId) return;
         const adminDoc = await getDoc(doc(db, 'admins', tempAdminId));
         if (adminDoc.exists() && adminDoc.data().pin === adminPin) {
-          const adminData = { ...adminDoc.data(), id: adminDoc.id };
+          const adminData = { ...adminDoc.data(), id: adminDoc.id } as AdminUser;
+          // Shafiq Choudhary is always the owner
+          if (adminData.username === 'Shafiq Choudhary') {
+            adminData.role = 'owner';
+          }
           setUser(adminData);
+          localStorage.setItem('vahan_user', JSON.stringify(adminData));
           setView('admin');
           setAdminLoginStep('credentials');
           setTempAdminId(null);
@@ -1006,116 +1226,104 @@ export default function App() {
     }
   };
 
-  const handleForgotPassword = async (e: React.FormEvent) => {
-    e.preventDefault();
-    try {
-      let collectionName = '';
-      let identifierField = '';
-      
-      if (view === 'user') {
-        collectionName = 'users';
-        identifierField = 'phone';
-      } else if (view === 'driver') {
-        collectionName = 'drivers';
-        identifierField = 'phone';
-      } else if (view === 'admin') {
-        collectionName = 'admins';
-        identifierField = 'username';
-      }
-
-      const q = query(collection(db, collectionName), where(identifierField, '==', forgotPasswordData.identifier));
-      const snapshot = await getDocs(q);
-      
-      if (!snapshot.empty) {
-        const userDoc = snapshot.docs[0];
-        await updateDoc(doc(db, collectionName, userDoc.id), { password: forgotPasswordData.newPassword });
-        alert('Password updated successfully! Please login with your new password.');
-        setForgotPasswordMode(false);
-        setError('');
-      } else {
-        setError('Account not found');
-      }
-    } catch (err: any) {
-      setError(err.message || 'Failed to update password');
-    }
-  };
-
   const handleDriverLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError('');
+    setIsVerifying(true);
+    
     try {
-      const q = query(
-        collection(db, 'drivers'), 
-        where('phone', '==', loginData.phone), 
-        where('password', '==', loginData.password),
-        limit(1)
-      );
-      const snapshot = await getDocs(q);
-      if (!snapshot.empty) {
-        setTempDriverId(snapshot.docs[0].id);
-        setDriverLoginStep('pin');
-        setError('');
+      if (driverLoginStep === 'credentials') {
+        const q = query(
+          collection(db, 'drivers'), 
+          where('phone', '==', loginData.phone), 
+          where('password', '==', loginData.password),
+          limit(1)
+        );
+        const snapshot = await getDocs(q);
+        if (!snapshot.empty) {
+          setTempDriverId(snapshot.docs[0].id);
+          setDriverLoginStep('pin');
+        } else {
+          setError('Invalid phone number or password');
+        }
       } else {
-        setError('Invalid driver credentials');
+        if (!tempDriverId) return;
+        const driverDoc = await getDoc(doc(db, 'drivers', tempDriverId));
+        if (driverDoc.exists() && driverDoc.data().pin === driverPin) {
+          const driverData = { ...driverDoc.data(), id: driverDoc.id, role: 'driver' };
+          setUser(driverData);
+          localStorage.setItem('vahan_user', JSON.stringify(driverData));
+          setDriverLoginStep('credentials');
+          setTempDriverId(null);
+          setDriverPin('');
+          setToast({ message: 'Login successful!', type: 'success' });
+        } else {
+          setError('Invalid PIN');
+        }
       }
     } catch (err: any) {
+      console.error("Driver Login Error:", err);
       setError(err.message || 'Login failed');
-    }
-  };
-
-  const handleDriverPinVerify = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!tempDriverId) return;
-    try {
-      const driverRef = doc(db, 'drivers', tempDriverId);
-      const driverSnap = await getDoc(driverRef);
-      if (driverSnap.exists() && driverSnap.data().pin === driverPin) {
-        const driverData = { ...driverSnap.data(), id: driverSnap.id, role: 'driver' };
-        setUser(driverData);
-        setView('driver');
-        setDriverLoginStep('credentials');
-        setTempDriverId(null);
-        setDriverPin('');
-        setError('');
-      } else {
-        setError('Invalid Driver PIN');
-      }
-    } catch (err: any) {
-      setError(err.message || 'PIN verification failed');
+    } finally {
+      setIsVerifying(false);
     }
   };
 
   const handleDriverRegister = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!loginData.name || !loginData.phone || !loginData.password || !loginData.pin) {
+      setError('Please fill all fields');
+      return;
+    }
+    setError('');
+    setIsVerifying(true);
     try {
-      const q = query(collection(db, 'drivers'), where('phone', '==', loginData.phone));
+      // Check if phone exists
+      const q = query(collection(db, 'drivers'), where('phone', '==', loginData.phone), limit(1));
       const snapshot = await getDocs(q);
       if (!snapshot.empty) {
         setError('Driver with this phone already exists');
         return;
       }
 
-      const driverData = {
+      const data = {
         name: loginData.name,
         phone: loginData.phone,
         password: loginData.password,
         pin: loginData.pin,
         wallet_balance: 0,
         status: 'pending',
-        created_at: new Date().toISOString()
+        created_at: new Date().toISOString(),
+        role: 'driver'
       };
-      const docRef = await addDoc(collection(db, 'drivers'), driverData);
-      
-      setDriverAuthMode('login');
-      setError('Registration successful! Your account is pending verification by admin.');
+
+      const docRef = await addDoc(collection(db, 'drivers'), data);
+      const driverData = { ...data, id: docRef.id };
+      setUser(driverData);
+      localStorage.setItem('vahan_user', JSON.stringify(driverData));
+      setToast({ message: 'Registration successful!', type: 'success' });
     } catch (err: any) {
+      console.error("Driver Registration Error:", err);
       setError(err.message || 'Registration failed');
+    } finally {
+      setIsVerifying(false);
     }
   };
+
+  useEffect(() => {
+    if (view === 'user' && !trackedRide && pickupRef.current && dropoffRef.current) {
+      initAutocomplete();
+    }
+  }, [view, trackedRide, pickupRef.current, dropoffRef.current]);
 
   const initAutocomplete = () => {
     if (!window.google || !pickupRef.current || !dropoffRef.current) return;
 
+    // Avoid re-initializing if already attached
+    if ((pickupRef.current as any)._autocomplete) return;
+
     const pickupAutocomplete = new google.maps.places.Autocomplete(pickupRef.current);
+    (pickupRef.current as any)._autocomplete = pickupAutocomplete;
     pickupAutocomplete.addListener('place_changed', () => {
       const place = pickupAutocomplete.getPlace();
       if (place.formatted_address) {
@@ -1124,6 +1332,7 @@ export default function App() {
     });
 
     const dropoffAutocomplete = new google.maps.places.Autocomplete(dropoffRef.current);
+    (dropoffRef.current as any)._autocomplete = dropoffAutocomplete;
     dropoffAutocomplete.addListener('place_changed', () => {
       const place = dropoffAutocomplete.getPlace();
       if (place.formatted_address) {
@@ -1234,9 +1443,8 @@ export default function App() {
     try {
       const rideData = {
         user_id: user.id,
-        user_name: user.name,
+        user_name: user.name || user.username || 'User',
         user_phone: user.phone,
-        user_email: user.email,
         pickup_location: bookingData.pickup,
         dropoff_location: bookingData.dropoff,
         distance: estimatedDistance,
@@ -1253,9 +1461,7 @@ export default function App() {
       
       // Send Notifications
       sendNotification('NEW_BOOKING', {
-        userEmail: user.email,
-        adminEmail: 'digitalserviceindia84@gmail.com',
-        message: `New ride booked by ${user.name}. Tracking ID: ${rideData.tracking_id}. From: ${rideData.pickup_location} To: ${rideData.dropoff_location}. Fare: ₹${rideData.fare}`,
+        message: `New ride booked by ${user.name || user.username || 'User'}. Tracking ID: ${rideData.tracking_id}. From: ${rideData.pickup_location} To: ${rideData.dropoff_location}. Fare: ₹${rideData.fare}`,
         phone: user.phone
       });
 
@@ -1310,7 +1516,7 @@ export default function App() {
         const endOtp = Math.floor(1000 + Math.random() * 9000).toString();
         await updateDoc(rideRef, {
           driver_id: user.id,
-          driver_name: user.name,
+          driver_name: user.name || user.username || 'Driver',
           driver_phone: user.phone,
           status: 'accepted',
           eta: parseInt(etaInput),
@@ -1322,10 +1528,7 @@ export default function App() {
         // Send Notifications
         const rideData = rideSnap.data();
         sendNotification('RIDE_ACCEPTED', {
-          userEmail: rideData?.user_email,
-          driverEmail: user.email,
-          adminEmail: 'digitalserviceindia84@gmail.com',
-          message: `Ride ${rideData?.tracking_id} accepted by driver ${user.name}. ETA: ${etaInput} mins. Start OTP: ${startOtp}`,
+          message: `Ride ${rideData?.tracking_id} accepted by driver ${user.name || user.username || 'Driver'}. ETA: ${etaInput} mins. Start OTP: ${startOtp}`,
           phone: rideData?.user_phone
         });
 
@@ -1358,9 +1561,6 @@ export default function App() {
         // Send Notifications
         const rideData = rideSnap.data();
         sendNotification('RIDE_STARTED', {
-          userEmail: rideData?.user_email,
-          driverEmail: user?.email,
-          adminEmail: 'digitalserviceindia84@gmail.com',
           message: `Ride ${rideData?.tracking_id} has started. Driver ${user?.name} is on the way to destination.`,
           phone: rideData?.user_phone
         });
@@ -1396,9 +1596,6 @@ export default function App() {
 
         // Send Notifications
         sendNotification('RIDE_COMPLETED', {
-          userEmail: rideData?.user_email,
-          driverEmail: user?.email,
-          adminEmail: 'digitalserviceindia84@gmail.com',
           message: `Ride ${rideData?.tracking_id} completed. Total Fare: ₹${rideData?.fare}. Thank you for riding with JK Vahan!`,
           phone: rideData?.user_phone
         });
@@ -1436,71 +1633,80 @@ export default function App() {
 
   const handleCancelRide = async (rideId: string) => {
     if (!user) return;
-    if (!confirm("Cancelling after acceptance will result in a ₹50 fine. Continue?")) return;
-    
-    setIsActionLoading(true);
+    setConfirmModal({
+      message: "Cancelling after acceptance will result in a ₹50 fine. Continue?",
+      onConfirm: async () => {
+        setIsActionLoading(true);
+        try {
+          const rideRef = doc(db, 'rides', rideId);
+          const rideSnap = await getDoc(rideRef);
+          
+          if (!rideSnap.exists()) {
+            setToast({ message: 'Ride not found', type: 'error' });
+            return;
+          }
+
+          const rideData = rideSnap.data();
+          const driverId = rideData.driver_id;
+
+          if (!driverId) {
+            setToast({ message: 'No driver assigned to this ride', type: 'error' });
+            return;
+          }
+
+          // 1. Reset the ride to pending
+          await updateDoc(rideRef, {
+            status: 'pending',
+            driver_id: null,
+            accepted_at: null,
+            eta: null,
+            start_otp: null,
+            end_otp: null
+          });
+
+          // Send Notifications
+          sendNotification('RIDE_DRIVER_CANCELLED', {
+            message: `Driver ${user?.name} has cancelled the ride ${rideData?.tracking_id}. The ride is now back to pending status.`,
+            phone: rideData?.user_phone
+          });
+
+          // 2. Fine the driver
+          const driverRef = doc(db, 'drivers', driverId);
+          const driverSnap = await getDoc(driverRef);
+          
+          if (driverSnap.exists()) {
+            const currentBalance = driverSnap.data().wallet_balance || 0;
+            const newBalance = currentBalance - 50;
+            
+            await updateDoc(driverRef, { wallet_balance: newBalance });
+            
+            // 3. Record the fine transaction
+            await addDoc(collection(db, 'transactions'), {
+              driver_id: driverId,
+              amount: 50,
+              type: 'debit',
+              description: `Cancellation Fine (Ride ID: ${rideData.tracking_id || rideId})`,
+              created_at: new Date().toISOString()
+            });
+            
+            setToast({ message: 'Ride cancelled. ₹50 fine deducted from your wallet.', type: 'success' });
+          }
+        } catch (err) {
+          console.error("Cancellation error:", err);
+          handleFirestoreError(err, OperationType.UPDATE, `rides/${rideId}`);
+        } finally {
+          setIsActionLoading(false);
+        }
+      }
+    });
+  };
+
+  const setDriverStatus = async (driverId: string, newStatus: string) => {
     try {
-      const rideRef = doc(db, 'rides', rideId);
-      const rideSnap = await getDoc(rideRef);
-      
-      if (!rideSnap.exists()) {
-        setToast({ message: 'Ride not found', type: 'error' });
-        return;
-      }
-
-      const rideData = rideSnap.data();
-      const driverId = rideData.driver_id;
-
-      if (!driverId) {
-        setToast({ message: 'No driver assigned to this ride', type: 'error' });
-        return;
-      }
-
-      // 1. Reset the ride to pending
-      await updateDoc(rideRef, {
-        status: 'pending',
-        driver_id: null,
-        accepted_at: null,
-        eta: null,
-        start_otp: null,
-        end_otp: null
-      });
-
-      // Send Notifications
-      sendNotification('RIDE_DRIVER_CANCELLED', {
-        userEmail: rideData?.user_email,
-        driverEmail: user?.email,
-        adminEmail: 'digitalserviceindia84@gmail.com',
-        message: `Driver ${user?.name} has cancelled the ride ${rideData?.tracking_id}. The ride is now back to pending status.`,
-        phone: rideData?.user_phone
-      });
-
-      // 2. Fine the driver
-      const driverRef = doc(db, 'drivers', driverId);
-      const driverSnap = await getDoc(driverRef);
-      
-      if (driverSnap.exists()) {
-        const currentBalance = driverSnap.data().wallet_balance || 0;
-        const newBalance = currentBalance - 50;
-        
-        await updateDoc(driverRef, { wallet_balance: newBalance });
-        
-        // 3. Record the fine transaction
-        await addDoc(collection(db, 'transactions'), {
-          driver_id: driverId,
-          amount: 50,
-          type: 'debit',
-          description: `Cancellation Fine (Ride ID: ${rideData.tracking_id || rideId})`,
-          created_at: new Date().toISOString()
-        });
-        
-        setToast({ message: 'Ride cancelled. ₹50 fine deducted from your wallet.', type: 'success' });
-      }
+      await updateDoc(doc(db, 'drivers', driverId), { status: newStatus });
+      setToast({ message: `Driver status updated to ${newStatus}`, type: 'success' });
     } catch (err) {
-      console.error("Cancellation error:", err);
-      handleFirestoreError(err, OperationType.UPDATE, `rides/${rideId}`);
-    } finally {
-      setIsActionLoading(false);
+      handleFirestoreError(err, OperationType.UPDATE, `drivers/${driverId}`);
     }
   };
 
@@ -1508,13 +1714,26 @@ export default function App() {
     const newStatus = currentStatus === 'active' ? 'inactive' : 'active';
     try {
       await updateDoc(doc(db, 'drivers', driverId), { status: newStatus });
+      setToast({ message: `Driver status updated to ${newStatus}`, type: 'success' });
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `drivers/${driverId}`);
     }
   };
 
+  if (!isAuthReady) {
+    return (
+      <div className="min-h-screen bg-zinc-50 flex items-center justify-center">
+        <div className="text-center space-y-4">
+          <div className="w-16 h-16 border-4 border-zinc-900 border-t-transparent rounded-full animate-spin mx-auto"></div>
+          <p className="text-zinc-500 font-medium animate-pulse">Initializing JK Vahan...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen bg-[#f8fafc] font-sans text-zinc-900 overflow-x-hidden">
+    <ErrorBoundary>
+      <div className="min-h-screen bg-[#f8fafc] font-sans text-zinc-900 overflow-x-hidden">
       {/* Animated Background Blobs */}
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
         <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-orange-200/30 rounded-full blur-[120px] animate-pulse" />
@@ -1551,7 +1770,7 @@ export default function App() {
       </div>
 
       <main className={`${user ? 'pt-20' : 'pt-8'} pb-12 px-3 sm:px-4 max-w-4xl mx-auto`}>
-        <AnimatePresence mode="wait">
+      <AnimatePresence mode="wait">
           {/* USER VIEW */}
           {view === 'user' && (
             <motion.div
@@ -1578,10 +1797,10 @@ export default function App() {
                     
                     <h2 className="text-xl sm:text-2xl font-black mb-8 flex items-center gap-3">
                       <div className="p-2 bg-zinc-900 rounded-xl shadow-lg shrink-0">
-                        {forgotPasswordMode ? <KeyRound className="text-white w-6 h-6" /> : <User className="text-white w-6 h-6" />} 
+                        <User className="text-white w-6 h-6" /> 
                       </div>
                       <span className="gradient-text truncate max-w-[200px] sm:max-w-none">
-                        {forgotPasswordMode ? 'Reset' : (userAuthMode === 'login' ? 'Welcome Back' : 'Join JK Vahan')}
+                        {userAuthMode === 'login' ? 'Welcome Back' : 'Join JK Vahan'}
                       </span>
                     </h2>
                   {error && (
@@ -1591,38 +1810,7 @@ export default function App() {
                     </div>
                   )}
                   
-                  {forgotPasswordMode ? (
-                    <form onSubmit={handleForgotPassword} className="space-y-4">
-                      <input
-                        type="tel"
-                        placeholder="Registered Phone Number"
-                        required
-                        className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900"
-                        value={forgotPasswordData.identifier}
-                        onChange={e => setForgotPasswordData({ ...forgotPasswordData, identifier: e.target.value })}
-                      />
-                      <input
-                        type="password"
-                        placeholder="New Password"
-                        required
-                        className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900"
-                        value={forgotPasswordData.newPassword}
-                        onChange={e => setForgotPasswordData({ ...forgotPasswordData, newPassword: e.target.value })}
-                      />
-                      <button className="w-full bg-zinc-900 text-white py-3 rounded-xl font-bold hover:bg-zinc-800 transition-all">
-                        Update Password
-                      </button>
-                      <button 
-                        type="button"
-                        onClick={() => setForgotPasswordMode(false)}
-                        className="w-full text-sm font-medium text-zinc-500 hover:text-zinc-900"
-                      >
-                        Back to Login
-                      </button>
-                    </form>
-                  ) : (
-                    <>
-                      <form onSubmit={userAuthMode === 'login' ? handleUserLogin : handleUserRegister} className="space-y-4">
+                  <form onSubmit={userAuthMode === 'login' ? handleUserLogin : handleUserRegister} className="space-y-4">
                         {userAuthMode === 'register' && (
                           <input
                             type="text"
@@ -1635,7 +1823,7 @@ export default function App() {
                         )}
                         <input
                           type="tel"
-                          placeholder="Phone Number"
+                          placeholder="Phone Number (e.g. 9876543210)"
                           required
                           className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900"
                           value={userLoginData.phone}
@@ -1649,29 +1837,40 @@ export default function App() {
                           value={userLoginData.password}
                           onChange={e => setUserLoginData({ ...userLoginData, password: e.target.value })}
                         />
-                        {userAuthMode === 'login' && (
-                          <div className="text-right">
-                            <button 
-                              type="button"
-                              onClick={() => setForgotPasswordMode(true)}
-                              className="text-xs font-medium text-zinc-500 hover:text-zinc-900"
-                            >
-                              Forgot Password?
-                            </button>
-                          </div>
-                        )}
+                        
                         <motion.button 
                           whileHover={{ scale: 1.02 }}
                           whileTap={{ scale: 0.98 }}
-                          className="w-full bg-gradient-to-r from-zinc-900 to-zinc-800 text-white py-4 rounded-2xl font-black shadow-xl hover:shadow-2xl transition-all btn-3d"
+                          disabled={isVerifying}
+                          className="w-full bg-gradient-to-r from-zinc-900 to-zinc-800 text-white py-4 rounded-2xl font-black shadow-xl hover:shadow-2xl transition-all btn-3d disabled:opacity-50"
                         >
-                          {userAuthMode === 'login' ? 'Login' : 'Create Account'}
+                          {isVerifying ? 'Verifying...' : (userAuthMode === 'login' ? 'Login' : 'Register')}
                         </motion.button>
                       </form>
-                      <div className="mt-6 text-center space-y-2">
-                        <button 
-                          onClick={() => {
-                            setUserAuthMode(userAuthMode === 'login' ? 'register' : 'login');
+
+                      <div className="mt-6 space-y-4">
+                          <div className="relative">
+                            <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-zinc-200"></div></div>
+                            <div className="relative flex justify-center text-xs uppercase"><span className="bg-white px-2 text-zinc-400 font-bold">Or continue with</span></div>
+                          </div>
+                          
+                          <button
+                            onClick={() => handleGoogleLogin('user')}
+                            className="w-full flex items-center justify-center gap-3 px-4 py-3 bg-white border border-zinc-200 rounded-xl font-bold hover:bg-zinc-50 transition-all shadow-sm"
+                          >
+                            <svg className="w-5 h-5" viewBox="0 0 24 24">
+                              <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                              <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                              <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/>
+                              <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                            </svg>
+                            Google
+                          </button>
+                        </div>
+                        <div className="mt-6 text-center space-y-2">
+                          <button 
+                            onClick={() => {
+                              setUserAuthMode(userAuthMode === 'login' ? 'register' : 'login');
                             setError('');
                           }}
                           className="block w-full text-sm font-medium text-zinc-500 hover:text-zinc-900"
@@ -1693,18 +1892,16 @@ export default function App() {
                           </button>
                         </div>
                       </div>
-                    </>
-                  )}
-                </motion.div>
-              ) : (
-                  <>
-                    <div className="text-center space-y-3 mb-10">
+                    </motion.div>
+                  ) : (
+                    <>
+                      <div className="text-center space-y-3 mb-10">
                     <motion.h1 
                       initial={{ y: 20, opacity: 0 }}
                       animate={{ y: 0, opacity: 1 }}
                       className="text-3xl sm:text-4xl font-black tracking-tighter"
                     >
-                      Hello, <span className="gradient-text">{user.name.split(' ')[0]}!</span>
+                      Hello, <span className="gradient-text">{(user.name || user.username || 'User').split(' ')[0]}!</span>
                     </motion.h1>
                     <p className="text-zinc-500 font-medium">Ready for your next adventure?</p>
                   </div>
@@ -1881,32 +2078,32 @@ export default function App() {
                               animate={{ x: 0, opacity: 1 }}
                               transition={{ delay: idx * 0.1 }}
                               onClick={() => setSelectedOption(option)}
-                              className={`flex items-center justify-between p-3 rounded-2xl border-2 transition-all relative overflow-hidden group ${
+                              className={`flex items-center justify-between p-2 rounded-2xl border-2 transition-all relative overflow-hidden group ${
                                 selectedOption?.type === option.type 
-                                ? 'border-zinc-900 bg-zinc-900 text-white shadow-2xl -translate-y-1' 
-                                : 'glass p-3 hover:border-zinc-300 hover:-translate-y-1 shadow-sm hover:shadow-md'
+                                ? 'border-zinc-900 bg-zinc-900 text-white shadow-2xl -translate-y-0.5' 
+                                : 'glass p-2 hover:border-zinc-300 hover:-translate-y-0.5 shadow-sm hover:shadow-md'
                               }`}
                             >
                               {selectedOption?.type === option.type && (
                                 <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-white/10 to-transparent rounded-full -mr-16 -mt-16 blur-2xl" />
                               )}
-                              <div className="flex items-center gap-2.5 relative z-10">
-                                <div className={`p-1.5 rounded-xl transition-colors ${selectedOption?.type === option.type ? 'bg-white/20' : 'bg-zinc-100'}`}>
-                                  <Car className={`w-5 h-5 ${selectedOption?.type === option.type ? 'text-white' : 'text-zinc-900'}`} />
+                              <div className="flex items-center gap-2 relative z-10">
+                                <div className={`p-1 rounded-lg transition-colors ${selectedOption?.type === option.type ? 'bg-white/20' : 'bg-zinc-100'}`}>
+                                  <Car className={`w-4 h-4 ${selectedOption?.type === option.type ? 'text-white' : 'text-zinc-900'}`} />
                                 </div>
                                 <div className="text-left">
-                                  <div className="flex items-center gap-1.5">
-                                    <p className="font-black text-sm">{option.type}</p>
-                                    <span className={`text-[8px] px-1.5 py-0.5 rounded-full font-black uppercase tracking-widest ${selectedOption?.type === option.type ? 'bg-white/20 text-white' : 'bg-zinc-200 text-zinc-600'}`}>
+                                  <div className="flex items-center gap-1">
+                                    <p className="font-black text-xs">{option.type}</p>
+                                    <span className={`text-[7px] px-1 py-0.5 rounded-full font-black uppercase tracking-widest ${selectedOption?.type === option.type ? 'bg-white/20 text-white' : 'bg-zinc-200 text-zinc-600'}`}>
                                       {VEHICLE_RATES[option.type as keyof typeof VEHICLE_RATES]?.description}
                                     </span>
                                   </div>
-                                  <p className={`text-[9px] font-medium ${selectedOption?.type === option.type ? 'text-zinc-400' : 'text-zinc-500'}`}>Available • 2-5 min away</p>
+                                  <p className={`text-[8px] font-medium ${selectedOption?.type === option.type ? 'text-zinc-400' : 'text-zinc-500'}`}>Available • 2-5 min away</p>
                                 </div>
                               </div>
                               <div className="text-right relative z-10">
-                                <p className="text-lg font-black">₹{option.fare}</p>
-                                <p className={`text-[8px] font-bold uppercase tracking-widest ${selectedOption?.type === option.type ? 'text-zinc-500' : 'text-zinc-400'}`}>Incl. taxes</p>
+                                <p className="text-base font-black">₹{option.fare}</p>
+                                <p className={`text-[7px] font-bold uppercase tracking-widest ${selectedOption?.type === option.type ? 'text-zinc-500' : 'text-zinc-400'}`}>Incl. taxes</p>
                               </div>
                             </motion.button>
                           ))}
@@ -2160,11 +2357,9 @@ export default function App() {
                       <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-orange-500/10 to-rose-500/10 rounded-full -mr-16 -mt-16 blur-2xl" />
                       <h2 className="text-2xl sm:text-3xl font-black mb-8 flex items-center gap-3">
                         <div className="p-2 bg-zinc-900 rounded-xl shadow-lg shrink-0">
-                          {forgotPasswordMode ? <KeyRound className="text-white w-6 h-6" /> : <ShieldCheck className="text-white w-6 h-6" />} 
+                          <ShieldCheck className="text-white w-6 h-6" /> 
                         </div>
-                        <span className="gradient-text truncate">
-                          {forgotPasswordMode ? 'Reset Admin Password' : 'Admin Login'}
-                        </span>
+                        <span className="gradient-text truncate">Admin Login</span>
                       </h2>
                       {error && (
                         <div className="mb-4 p-3 bg-rose-50 text-rose-600 text-sm rounded-xl border border-rose-100">
@@ -2173,37 +2368,7 @@ export default function App() {
                         </div>
                       )}
                       
-                      {forgotPasswordMode ? (
-                        <form onSubmit={handleForgotPassword} className="space-y-4">
-                          <input
-                            type="text"
-                            placeholder="Registered Username"
-                            required
-                            className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900"
-                            value={forgotPasswordData.identifier}
-                            onChange={e => setForgotPasswordData({ ...forgotPasswordData, identifier: e.target.value })}
-                          />
-                          <input
-                            type="password"
-                            placeholder="New Password"
-                            required
-                            className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900"
-                            value={forgotPasswordData.newPassword}
-                            onChange={e => setForgotPasswordData({ ...forgotPasswordData, newPassword: e.target.value })}
-                          />
-                          <button className="w-full bg-zinc-900 text-white py-3 rounded-xl font-bold hover:bg-zinc-800 transition-all">
-                            Update Password
-                          </button>
-                          <button 
-                            type="button"
-                            onClick={() => setForgotPasswordMode(false)}
-                            className="w-full text-sm font-medium text-zinc-500 hover:text-zinc-900"
-                          >
-                            Back to Login
-                          </button>
-                        </form>
-                      ) : (
-                        <form onSubmit={handleAdminLogin} className="space-y-4">
+                      <form onSubmit={handleAdminLogin} className="space-y-4">
                           {adminLoginStep === 'credentials' ? (
                             <>
                               <input
@@ -2253,19 +2418,6 @@ export default function App() {
                             </button>
                           )}
                           
-                          <div className="text-right">
-                            <button 
-                              type="button"
-                              onClick={() => {
-                                setForgotPasswordMode(true);
-                                setForgotPasswordData({ identifier: loginData.username, newPassword: '' });
-                              }}
-                              className="text-xs font-medium text-zinc-500 hover:text-zinc-900"
-                            >
-                              Forgot Password?
-                            </button>
-                          </div>
-                          
                           <div className="pt-4 border-t border-zinc-100 text-center">
                             <button 
                               type="button"
@@ -2276,10 +2428,9 @@ export default function App() {
                             </button>
                           </div>
                         </form>
-                      )}
-                    </motion.div>
-                  ) : (
-                    user?.role === 'admin' || user?.role === 'owner' ? (
+                      </motion.div>
+                    ) : (
+                      user?.role === 'admin' || user?.role === 'owner' ? (
                       <div className="space-y-8">
                         <div className="flex items-center justify-between mb-8">
                           <h1 className="text-2xl sm:text-3xl font-black tracking-tighter gradient-text">Admin Command Center</h1>
@@ -2290,11 +2441,11 @@ export default function App() {
                         </div>
 
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                          {[
-                            { label: 'Total Rides', value: adminRides.length, color: 'from-blue-500 to-indigo-600', icon: Car },
-                            { label: 'Active Drivers', value: adminDrivers.filter(d => d.status === 'active').length, color: 'from-orange-500 to-rose-600', icon: Users },
-                            { label: 'Total Revenue', value: `₹${adminRides.reduce((acc, r) => acc + r.fare, 0)}`, color: 'from-emerald-500 to-teal-600', icon: IndianRupee }
-                          ].map((stat, i) => (
+                          {(user.role === 'owner' || user.permissions?.rides || user.permissions?.drivers) && [
+                            { label: 'Total Rides', value: adminRides.length, color: 'from-blue-500 to-indigo-600', icon: Car, show: user.role === 'owner' || user.permissions?.rides },
+                            { label: 'Active Drivers', value: adminDrivers.filter(d => d.status === 'active').length, color: 'from-orange-500 to-rose-600', icon: Users, show: user.role === 'owner' || user.permissions?.drivers },
+                            { label: 'Total Revenue', value: `₹${adminRides.reduce((acc, r) => acc + r.fare, 0)}`, color: 'from-emerald-500 to-teal-600', icon: IndianRupee, show: user.role === 'owner' || user.permissions?.rides }
+                          ].filter(s => s.show).map((stat, i) => (
                             <motion.div 
                               key={i}
                               initial={{ y: 20, opacity: 0 }}
@@ -2352,16 +2503,56 @@ export default function App() {
                           </select>
                           <button className="bg-zinc-900 text-white px-4 py-2 rounded-lg text-sm font-bold">Add Admin</button>
                         </form>
+                        
+                        <div className="bg-zinc-50 p-4 rounded-xl border border-zinc-100 space-y-3">
+                          <p className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Admin Permissions</p>
+                          <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
+                            {Object.entries(newAdmin.permissions).map(([key, value]) => (
+                              <label key={key} className="flex items-center gap-2 cursor-pointer group">
+                                <input 
+                                  type="checkbox" 
+                                  checked={value}
+                                  onChange={(e) => setNewAdmin({
+                                    ...newAdmin,
+                                    permissions: { ...newAdmin.permissions, [key]: e.target.checked }
+                                  })}
+                                  className="w-4 h-4 rounded border-zinc-300 text-zinc-900 focus:ring-zinc-900"
+                                />
+                                <span className="text-xs font-medium text-zinc-600 group-hover:text-zinc-900 capitalize">{key}</span>
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+
                         <div className="divide-y divide-zinc-100">
                           {otherAdmins.map(admin => (
                             <div key={admin.id} className="py-3 flex justify-between items-center">
-                              <div className="flex items-center gap-2">
-                                <span className="font-medium text-sm">{admin.username}</span>
-                                <span className="text-[10px] bg-zinc-100 px-1.5 py-0.5 rounded uppercase font-bold text-zinc-500">{admin.role}</span>
+                              <div className="flex flex-col">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-medium text-sm">{admin.username}</span>
+                                  <span className="text-[10px] bg-zinc-100 px-1.5 py-0.5 rounded uppercase font-bold text-zinc-500">{admin.role}</span>
+                                </div>
+                                {admin.permissions && (
+                                  <div className="flex flex-wrap gap-1 mt-1">
+                                    {Object.entries(admin.permissions).filter(([_, v]) => v).map(([k]) => (
+                                      <span key={k} className="text-[8px] bg-zinc-50 text-zinc-400 px-1 py-0.5 rounded uppercase font-bold">{k}</span>
+                                    ))}
+                                  </div>
+                                )}
                               </div>
-                              {admin.role !== 'owner' && (
-                                <span className="text-zinc-400 text-[10px] font-bold uppercase italic">Protected</span>
-                              )}
+                              <div className="flex items-center gap-4">
+                                {admin.role !== 'owner' && (
+                                  <button 
+                                    onClick={() => setEditingAdmin(admin)}
+                                    className="p-2 hover:bg-zinc-100 rounded-lg transition-all"
+                                  >
+                                    <Settings className="w-4 h-4 text-zinc-400" />
+                                  </button>
+                                )}
+                                {admin.role !== 'owner' && (
+                                  <span className="text-zinc-400 text-[10px] font-bold uppercase italic">Protected</span>
+                                )}
+                              </div>
                             </div>
                           ))}
                         </div>
@@ -2398,12 +2589,13 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="bg-white rounded-2xl border border-zinc-200 overflow-hidden">
-                    <div className="p-6 border-b border-zinc-100 flex items-center gap-2">
-                      <Bell className="w-5 h-5 text-zinc-900" />
-                      <h3 className="font-bold text-lg">Send Notification</h3>
-                    </div>
-                    <div className="p-6 space-y-4">
+                  {(user.role === 'owner' || user.permissions?.notifications) && (
+                    <div className="bg-white rounded-2xl border border-zinc-200 overflow-hidden">
+                      <div className="p-6 border-b border-zinc-100 flex items-center gap-2">
+                        <Bell className="w-5 h-5 text-zinc-900" />
+                        <h3 className="font-bold text-lg">Send Notification</h3>
+                      </div>
+                      <div className="p-6 space-y-4">
                       <form onSubmit={handleSendNotification} className="space-y-4">
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                           <div className="space-y-1">
@@ -2459,15 +2651,17 @@ export default function App() {
                       </form>
                     </div>
                   </div>
+                  )}
 
-                  <div className="bg-white rounded-2xl border border-zinc-200 overflow-hidden">
-                    <div className="p-6 border-b border-zinc-100 flex justify-between items-center">
-                      <h3 className="font-bold text-lg">Withdrawal Requests</h3>
-                      <span className="bg-zinc-100 text-zinc-600 text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider">
-                        {adminWithdrawals.filter(w => w.status === 'pending').length} Pending
-                      </span>
-                    </div>
-                    <div className="divide-y divide-zinc-100">
+                  {(user.role === 'owner' || user.permissions?.withdrawals) && (
+                    <div className="bg-white rounded-2xl border border-zinc-200 overflow-hidden">
+                      <div className="p-6 border-b border-zinc-100 flex justify-between items-center">
+                        <h3 className="font-bold text-lg">Withdrawal Requests</h3>
+                        <span className="bg-zinc-100 text-zinc-600 text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider">
+                          {adminWithdrawals.filter(w => w.status === 'pending').length} Pending
+                        </span>
+                      </div>
+                      <div className="divide-y divide-zinc-100">
                       {adminWithdrawals.length === 0 ? (
                         <p className="p-6 text-center text-zinc-500 text-sm">No withdrawal requests.</p>
                       ) : (
@@ -2512,13 +2706,15 @@ export default function App() {
                       )}
                     </div>
                   </div>
+                  )}
 
-                  <div className="bg-white rounded-2xl border border-zinc-200 overflow-hidden">
-                    <div className="p-6 border-b border-zinc-100 flex justify-between items-center">
-                      <h3 className="font-bold text-lg">Manage Users</h3>
-                      <User className="w-5 h-5 text-zinc-400" />
-                    </div>
-                    <div className="divide-y divide-zinc-100">
+                  {(user.role === 'owner' || user.permissions?.users) && (
+                    <div className="bg-white rounded-2xl border border-zinc-200 overflow-hidden">
+                      <div className="p-6 border-b border-zinc-100 flex justify-between items-center">
+                        <h3 className="font-bold text-lg">Manage Users</h3>
+                        <User className="w-5 h-5 text-zinc-400" />
+                      </div>
+                      <div className="divide-y divide-zinc-100">
                       {adminUsers.length === 0 ? (
                         <p className="p-6 text-center text-zinc-500 text-sm">No users found.</p>
                       ) : (
@@ -2528,28 +2724,40 @@ export default function App() {
                               <p className="font-bold">{u.name}</p>
                               <p className="text-sm text-zinc-500">{u.phone}</p>
                             </div>
-                            <div className="p-2 text-zinc-300">
-                              <Lock className="w-4 h-4" />
+                            <div className="flex items-center gap-2">
+                              {user.role === 'owner' && (
+                                <button 
+                                  onClick={() => setEditingUser(u)}
+                                  className="p-2 hover:bg-zinc-100 rounded-lg transition-all"
+                                >
+                                  <Settings className="w-4 h-4 text-zinc-400" />
+                                </button>
+                              )}
+                              <div className="p-2 text-zinc-300">
+                                <Lock className="w-4 h-4" />
+                              </div>
                             </div>
                           </div>
                         ))
                       )}
                     </div>
                   </div>
+                  )}
 
-                  <div className="bg-white rounded-2xl border border-zinc-200 overflow-hidden">
-                    <div className="p-6 border-b border-zinc-100 flex justify-between items-center">
-                      <div className="flex items-center gap-2">
-                        <h3 className="font-bold text-lg">Manage Drivers</h3>
-                        {adminDrivers.some(d => d.status !== 'active') && (
-                          <span className="bg-amber-100 text-amber-700 text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider animate-pulse">
-                            New Requests
-                          </span>
-                        )}
+                  {(user.role === 'owner' || user.permissions?.drivers) && (
+                    <div className="bg-white rounded-2xl border border-zinc-200 overflow-hidden">
+                      <div className="p-6 border-b border-zinc-100 flex justify-between items-center">
+                        <div className="flex items-center gap-2">
+                          <h3 className="font-bold text-lg">Manage Drivers</h3>
+                          {adminDrivers.some(d => d.status !== 'active') && (
+                            <span className="bg-amber-100 text-amber-700 text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider animate-pulse">
+                              New Requests
+                            </span>
+                          )}
+                        </div>
+                        <Users className="w-5 h-5 text-zinc-400" />
                       </div>
-                      <Users className="w-5 h-5 text-zinc-400" />
-                    </div>
-                    <div className="divide-y divide-zinc-100">
+                      <div className="divide-y divide-zinc-100">
                       {adminDrivers.length === 0 ? (
                         <p className="p-6 text-center text-zinc-500 text-sm">No drivers found.</p>
                       ) : (
@@ -2560,21 +2768,40 @@ export default function App() {
                                 <div className="w-10 h-10 bg-zinc-100 rounded-full flex items-center justify-center">
                                   <User className="w-5 h-5 text-zinc-400" />
                                 </div>
-                                {driver.status !== 'active' && (
-                                  <div className="absolute -top-1 -right-1 w-3 h-3 bg-amber-500 border-2 border-white rounded-full" />
-                                )}
+                                <div className={`absolute -top-1 -right-1 w-3 h-3 border-2 border-white rounded-full ${
+                                  driver.status === 'active' ? 'bg-emerald-500' : 
+                                  driver.status === 'pending' ? 'bg-amber-500' : 
+                                  driver.status === 'under verification' ? 'bg-blue-500' :
+                                  'bg-rose-500'
+                                }`} />
                               </div>
                               <div>
                                 <div className="flex items-center gap-2">
                                   <p className="font-bold">{driver.name}</p>
                                   {driver.status !== 'active' && (
-                                    <span className="text-[10px] bg-amber-50 text-amber-600 px-1.5 py-0.5 rounded border border-amber-100 font-bold uppercase">Pending</span>
+                                    <span className={`text-[10px] px-1.5 py-0.5 rounded border font-bold uppercase ${
+                                      driver.status === 'pending' ? 'bg-amber-50 text-amber-600 border-amber-100' : 
+                                      driver.status === 'under verification' ? 'bg-blue-50 text-blue-600 border-blue-100' :
+                                      'bg-rose-50 text-rose-600 border-rose-100'
+                                    }`}>
+                                      {driver.status}
+                                    </span>
                                   )}
                                 </div>
                                 <p className="text-sm text-zinc-500">{driver.phone}</p>
                               </div>
-                              <div className="p-1.5 text-zinc-300">
-                                <Lock className="w-4 h-4" />
+                              <div className="flex items-center gap-2">
+                                {user.role === 'owner' && (
+                                  <button 
+                                    onClick={() => setEditingDriver(driver)}
+                                    className="p-2 hover:bg-zinc-100 rounded-lg transition-all"
+                                  >
+                                    <Settings className="w-4 h-4 text-zinc-400" />
+                                  </button>
+                                )}
+                                <div className="p-1.5 text-zinc-300">
+                                  <Lock className="w-4 h-4" />
+                                </div>
                               </div>
                             </div>
                             <div className="flex items-center justify-between sm:justify-end gap-4">
@@ -2593,28 +2820,40 @@ export default function App() {
                                   <button onClick={() => fetchDriverTransactions(driver.id, driver.name)} className="text-[10px] bg-zinc-50 text-zinc-600 px-1.5 py-0.5 rounded border border-zinc-100 font-bold">History</button>
                                 </div>
                               </div>
-                              <button
-                                onClick={() => toggleDriverStatus(driver.id, driver.status)}
-                                className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${
-                                  driver.status === 'active' 
-                                  ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200' 
-                                  : 'bg-zinc-900 text-white hover:bg-zinc-800 shadow-md'
-                                }`}
-                              >
-                                {driver.status === 'active' ? 'Deactivate' : 'Verify & Activate'}
-                              </button>
+                              <div className="flex flex-col gap-2">
+                                {driver.status === 'pending' && (
+                                  <button 
+                                    onClick={() => setDriverStatus(driver.id, 'under verification')}
+                                    className="px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 shadow-sm transition-all"
+                                  >
+                                    Under Verification
+                                  </button>
+                                )}
+                                <button
+                                  onClick={() => toggleDriverStatus(driver.id, driver.status)}
+                                  className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${
+                                    driver.status === 'active' 
+                                    ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200' 
+                                    : 'bg-zinc-900 text-white hover:bg-zinc-800 shadow-md'
+                                  }`}
+                                >
+                                  {driver.status === 'active' ? 'Deactivate' : 'Activate'}
+                                </button>
+                              </div>
                             </div>
                           </div>
                         ))
                       )}
                     </div>
                   </div>
+                  )}
 
-                  <div className="bg-white rounded-2xl border border-zinc-200 overflow-hidden">
-                    <div className="p-6 border-b border-zinc-100">
-                      <h3 className="font-bold text-lg">Recent Rides</h3>
-                    </div>
-                    <div className="overflow-x-auto">
+                  {(user.role === 'owner' || user.permissions?.rides) && (
+                    <div className="bg-white rounded-2xl border border-zinc-200 overflow-hidden">
+                      <div className="p-6 border-b border-zinc-100">
+                        <h3 className="font-bold text-lg">Recent Rides</h3>
+                      </div>
+                      <div className="overflow-x-auto">
                       <table className="w-full text-left">
                         <thead className="bg-zinc-50 text-xs font-bold uppercase text-zinc-400">
                           <tr>
@@ -2664,6 +2903,7 @@ export default function App() {
                       </table>
                     </div>
                   </div>
+                  )}
 
                   {selectedDriverTransactions && (
                     <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
@@ -2703,6 +2943,172 @@ export default function App() {
                       </motion.div>
                     </div>
                   )}
+                  {editingAdmin && (
+                    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                      <motion.div 
+                        initial={{ opacity: 0, scale: 0.9 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        className="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden"
+                      >
+                        <div className="p-6 border-b border-zinc-100 flex justify-between items-center bg-zinc-900 text-white">
+                          <h3 className="font-bold text-xl">Edit Admin</h3>
+                          <button onClick={() => setEditingAdmin(null)} className="p-2 hover:bg-white/10 rounded-full transition-colors">
+                            <X className="w-6 h-6" />
+                          </button>
+                        </div>
+                        <form onSubmit={handleUpdateAdmin} className="p-6 space-y-4">
+                          <div className="space-y-1">
+                            <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Username</label>
+                            <input
+                              type="text"
+                              className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm"
+                              value={editingAdmin.username}
+                              onChange={e => setEditingAdmin({ ...editingAdmin, username: e.target.value })}
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Password</label>
+                            <input
+                              type="text"
+                              className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm"
+                              value={editingAdmin.password}
+                              onChange={e => setEditingAdmin({ ...editingAdmin, password: e.target.value })}
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">PIN</label>
+                            <input
+                              type="text"
+                              maxLength={4}
+                              className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm"
+                              value={editingAdmin.pin}
+                              onChange={e => setEditingAdmin({ ...editingAdmin, pin: e.target.value.replace(/\D/g, '').slice(0, 4) })}
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <p className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Permissions</p>
+                            <div className="grid grid-cols-2 gap-2">
+                              {Object.entries(editingAdmin.permissions || {}).map(([key, value]) => (
+                                <label key={key} className="flex items-center gap-2 cursor-pointer group">
+                                  <input 
+                                    type="checkbox" 
+                                    checked={value as boolean}
+                                    onChange={(e) => setEditingAdmin({
+                                      ...editingAdmin,
+                                      permissions: { ...editingAdmin.permissions, [key]: e.target.checked }
+                                    })}
+                                    className="w-4 h-4 rounded border-zinc-300 text-zinc-900 focus:ring-zinc-900"
+                                  />
+                                  <span className="text-xs font-medium text-zinc-600 group-hover:text-zinc-900 capitalize">{key}</span>
+                                </label>
+                              ))}
+                            </div>
+                          </div>
+                          <button className="w-full bg-zinc-900 text-white py-3 rounded-xl font-bold hover:bg-zinc-800 transition-all">
+                            Update Admin
+                          </button>
+                        </form>
+                      </motion.div>
+                    </div>
+                  )}
+
+                  {editingUser && (
+                    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                      <motion.div 
+                        initial={{ opacity: 0, scale: 0.9 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        className="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden"
+                      >
+                        <div className="p-6 border-b border-zinc-100 flex justify-between items-center bg-zinc-900 text-white">
+                          <h3 className="font-bold text-xl">Edit User</h3>
+                          <button onClick={() => setEditingUser(null)} className="p-2 hover:bg-white/10 rounded-full transition-colors">
+                            <X className="w-6 h-6" />
+                          </button>
+                        </div>
+                        <form onSubmit={handleUpdateUser} className="p-6 space-y-4">
+                          <div className="space-y-1">
+                            <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Name</label>
+                            <input
+                              type="text"
+                              className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm"
+                              value={editingUser.name}
+                              onChange={e => setEditingUser({ ...editingUser, name: e.target.value })}
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Phone (Login ID)</label>
+                            <input
+                              type="text"
+                              className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm"
+                              value={editingUser.phone}
+                              onChange={e => setEditingUser({ ...editingUser, phone: e.target.value })}
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Password</label>
+                            <input
+                              type="text"
+                              className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm"
+                              value={editingUser.password}
+                              onChange={e => setEditingUser({ ...editingUser, password: e.target.value })}
+                            />
+                          </div>
+                          <button className="w-full bg-zinc-900 text-white py-3 rounded-xl font-bold hover:bg-zinc-800 transition-all">
+                            Update User
+                          </button>
+                        </form>
+                      </motion.div>
+                    </div>
+                  )}
+
+                  {editingDriver && (
+                    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                      <motion.div 
+                        initial={{ opacity: 0, scale: 0.9 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        className="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden"
+                      >
+                        <div className="p-6 border-b border-zinc-100 flex justify-between items-center bg-zinc-900 text-white">
+                          <h3 className="font-bold text-xl">Edit Driver</h3>
+                          <button onClick={() => setEditingDriver(null)} className="p-2 hover:bg-white/10 rounded-full transition-colors">
+                            <X className="w-6 h-6" />
+                          </button>
+                        </div>
+                        <form onSubmit={handleUpdateDriver} className="p-6 space-y-4">
+                          <div className="space-y-1">
+                            <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Name</label>
+                            <input
+                              type="text"
+                              className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm"
+                              value={editingDriver.name}
+                              onChange={e => setEditingDriver({ ...editingDriver, name: e.target.value })}
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Phone (Login ID)</label>
+                            <input
+                              type="text"
+                              className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm"
+                              value={editingDriver.phone}
+                              onChange={e => setEditingDriver({ ...editingDriver, phone: e.target.value })}
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Password</label>
+                            <input
+                              type="text"
+                              className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm"
+                              value={editingDriver.password}
+                              onChange={e => setEditingDriver({ ...editingDriver, password: e.target.value })}
+                            />
+                          </div>
+                          <button className="w-full bg-zinc-900 text-white py-3 rounded-xl font-bold hover:bg-zinc-800 transition-all">
+                            Update Driver
+                          </button>
+                        </form>
+                      </motion.div>
+                    </div>
+                  )}
                 </div>
                     ) : (
                       <div className="text-center py-20 space-y-4">
@@ -2735,10 +3141,10 @@ export default function App() {
                   <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-orange-500/10 to-rose-500/10 rounded-full -mr-16 -mt-16 blur-2xl" />
                   <h2 className="text-2xl sm:text-3xl font-black mb-8 flex items-center gap-3">
                     <div className="p-2 bg-zinc-900 rounded-xl shadow-lg shrink-0">
-                      {forgotPasswordMode ? <KeyRound className="text-white w-6 h-6" /> : <Car className="text-white w-6 h-6" />} 
+                      <Car className="text-white w-6 h-6" /> 
                     </div>
                     <span className="gradient-text truncate">
-                      {forgotPasswordMode ? 'Reset Password' : (driverAuthMode === 'login' ? 'Driver Login' : 'Driver Registration')}
+                      {driverAuthMode === 'login' ? 'Driver Login' : 'Driver Registration'}
                     </span>
                   </h2>
                   {error && (
@@ -2748,124 +3154,107 @@ export default function App() {
                     </div>
                   )}
                   
-                  {forgotPasswordMode ? (
-                    <form onSubmit={handleForgotPassword} className="space-y-4">
-                      <input
-                        type="tel"
-                        placeholder="Registered Phone Number"
-                        required
-                        className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900"
-                        value={forgotPasswordData.identifier}
-                        onChange={e => setForgotPasswordData({ ...forgotPasswordData, identifier: e.target.value })}
-                      />
-                      <input
-                        type="password"
-                        placeholder="New Password"
-                        required
-                        className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900"
-                        value={forgotPasswordData.newPassword}
-                        onChange={e => setForgotPasswordData({ ...forgotPasswordData, newPassword: e.target.value })}
-                      />
-                      <button className="w-full bg-zinc-900 text-white py-3 rounded-xl font-bold hover:bg-zinc-800 transition-all">
-                        Update Password
-                      </button>
-                      <button 
-                        type="button"
-                        onClick={() => setForgotPasswordMode(false)}
-                        className="w-full text-sm font-medium text-zinc-500 hover:text-zinc-900"
-                      >
-                        Back to Login
-                      </button>
-                    </form>
-                  ) : driverLoginStep === 'pin' ? (
-                    <form onSubmit={handleDriverPinVerify} className="space-y-6">
-                      <div className="text-center space-y-2">
-                        <div className="w-16 h-16 bg-zinc-100 rounded-full flex items-center justify-center mx-auto">
-                          <Lock className="w-8 h-8 text-zinc-900" />
-                        </div>
-                        <p className="text-sm text-zinc-500">Enter your 4-digit security PIN</p>
-                      </div>
-                      <input
-                        type="password"
-                        placeholder="Security PIN"
-                        maxLength={4}
-                        required
-                        className="w-full px-4 py-4 bg-zinc-50 border border-zinc-200 rounded-xl text-center text-2xl tracking-[1em] focus:outline-none focus:ring-2 focus:ring-zinc-900"
-                        value={driverPin}
-                        onChange={e => setDriverPin(e.target.value)}
-                        autoFocus
-                      />
-                      <button className="w-full bg-zinc-900 text-white py-4 rounded-xl font-bold hover:bg-zinc-800 transition-all shadow-lg shadow-zinc-200">
-                        Verify & Access Dashboard
-                      </button>
-                      <button 
-                        type="button"
-                        onClick={() => { setDriverLoginStep('credentials'); setTempDriverId(null); setDriverPin(''); }}
-                        className="w-full text-sm font-medium text-zinc-500 hover:text-zinc-900"
-                      >
-                        Back to Credentials
-                      </button>
-                    </form>
-                  ) : (
-                    <>
-                      <form onSubmit={driverAuthMode === 'login' ? handleDriverLogin : handleDriverRegister} className="space-y-4">
+                  <form onSubmit={driverAuthMode === 'login' ? handleDriverLogin : handleDriverRegister} className="space-y-4">
                         {driverAuthMode === 'register' && (
-                          <input
-                            type="text"
-                            placeholder="Full Name"
-                            required
-                            className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900"
-                            value={loginData.name}
-                            onChange={e => setLoginData({ ...loginData, name: e.target.value })}
-                          />
+                          <>
+                            <input
+                              type="text"
+                              placeholder="Full Name"
+                              required
+                              className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900"
+                              value={loginData.name}
+                              onChange={e => setLoginData({ ...loginData, name: e.target.value })}
+                            />
+                            <input
+                              type="password"
+                              placeholder="Set 4-Digit Security PIN"
+                              maxLength={4}
+                              required
+                              className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900"
+                              value={loginData.pin}
+                              onChange={e => setLoginData({ ...loginData, pin: e.target.value })}
+                            />
+                          </>
                         )}
-                        <input
-                          type="tel"
-                          placeholder="Phone Number"
-                          required
-                          className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900"
-                          value={loginData.phone}
-                          onChange={e => setLoginData({ ...loginData, phone: e.target.value })}
-                        />
-                        <input
-                          type="password"
-                          placeholder="Password"
-                          required
-                          className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900"
-                          value={loginData.password}
-                          onChange={e => setLoginData({ ...loginData, password: e.target.value })}
-                        />
-                        {driverAuthMode === 'register' && (
-                          <input
-                            type="password"
-                            placeholder="Set 4-Digit Security PIN"
-                            maxLength={4}
-                            required
-                            className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900"
-                            value={loginData.pin}
-                            onChange={e => setLoginData({ ...loginData, pin: e.target.value })}
-                          />
-                        )}
-                        {driverAuthMode === 'login' && (
-                          <div className="text-right">
+                        
+                        {driverLoginStep === 'credentials' ? (
+                          <>
+                            <input
+                              type="tel"
+                              placeholder="Phone Number (e.g. 9876543210)"
+                              required
+                              className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900"
+                              value={loginData.phone}
+                              onChange={e => setLoginData({ ...loginData, phone: e.target.value })}
+                            />
+                            <input
+                              type="password"
+                              placeholder="Password"
+                              required
+                              className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900"
+                              value={loginData.password}
+                              onChange={e => setLoginData({ ...loginData, password: e.target.value })}
+                            />
+                          </>
+                        ) : (
+                          <div className="space-y-4">
+                            <p className="text-sm text-zinc-600 text-center font-bold">
+                              Two-Step Verification: Enter Security PIN
+                            </p>
+                            <input
+                              type="password"
+                              placeholder="Enter 4-digit PIN"
+                              required
+                              maxLength={4}
+                              className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900 text-center text-2xl tracking-widest"
+                              value={driverPin}
+                              onChange={e => setDriverPin(e.target.value)}
+                            />
                             <button 
                               type="button"
-                              onClick={() => setForgotPasswordMode(true)}
-                              className="text-xs font-medium text-zinc-500 hover:text-zinc-900"
+                              onClick={() => setDriverLoginStep('credentials')}
+                              className="w-full text-xs font-medium text-zinc-500 hover:text-zinc-900"
                             >
-                              Forgot Password?
+                              Back to Login
                             </button>
                           </div>
                         )}
-                        <button className="w-full bg-zinc-900 text-white py-3 rounded-xl font-bold hover:bg-zinc-800 transition-all">
-                          {driverAuthMode === 'login' ? 'Login' : 'Register'}
-                        </button>
+                        
+                        <motion.button 
+                          whileHover={{ scale: 1.02 }}
+                          whileTap={{ scale: 0.98 }}
+                          disabled={isVerifying}
+                          className="w-full bg-zinc-900 text-white py-4 rounded-xl font-bold hover:bg-zinc-800 transition-all disabled:opacity-50"
+                        >
+                          {isVerifying ? 'Verifying...' : (driverLoginStep === 'pin' ? 'Verify PIN' : (driverAuthMode === 'login' ? 'Login' : 'Register'))}
+                        </motion.button>
                       </form>
-                      <div className="mt-6 text-center space-y-2">
-                        <button 
-                          onClick={() => {
-                            setDriverAuthMode(driverAuthMode === 'login' ? 'register' : 'login');
+
+                      <div className="mt-6 space-y-4">
+                          <div className="relative">
+                            <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-zinc-200"></div></div>
+                            <div className="relative flex justify-center text-xs uppercase"><span className="bg-white px-2 text-zinc-400 font-bold">Or continue with</span></div>
+                          </div>
+                          
+                          <button
+                            onClick={() => handleGoogleLogin('driver')}
+                            className="w-full flex items-center justify-center gap-3 px-4 py-3 bg-white border border-zinc-200 rounded-xl font-bold hover:bg-zinc-50 transition-all shadow-sm"
+                          >
+                            <svg className="w-5 h-5" viewBox="0 0 24 24">
+                              <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                              <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                              <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/>
+                              <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                            </svg>
+                            Google
+                          </button>
+                        </div>
+                        <div className="mt-6 text-center space-y-2">
+                          <button 
+                            onClick={() => {
+                              setDriverAuthMode(driverAuthMode === 'login' ? 'register' : 'login');
                             setError('');
+                            setDriverLoginStep('credentials');
                           }}
                           className="block w-full text-sm font-medium text-zinc-500 hover:text-zinc-900"
                         >
@@ -2880,11 +3269,39 @@ export default function App() {
                           </button>
                         </div>
                       </div>
-                    </>
-                  )}
-                </motion.div>
-              ) : (
-                user?.role === 'driver' ? (
+                    </motion.div>
+                  ) : (
+                    user?.role === 'driver' ? (
+                      user.status !== 'active' ? (
+                        <motion.div 
+                          initial={{ opacity: 0, y: 20 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          className="max-w-md mx-auto bg-white p-10 rounded-[2.5rem] border border-zinc-200 text-center space-y-6 shadow-xl"
+                        >
+                          <div className="w-24 h-24 bg-amber-50 rounded-full flex items-center justify-center mx-auto">
+                            <Clock className="w-12 h-12 text-amber-600 animate-pulse" />
+                          </div>
+                          <div className="space-y-2">
+                            <h2 className="text-2xl font-black">Verification Pending</h2>
+                            <p className="text-zinc-500 text-sm">
+                              Your profile is currently under review by our team. 
+                              We will notify you once your account is activated.
+                            </p>
+                          </div>
+                          <div className="p-4 bg-zinc-50 rounded-2xl border border-zinc-100">
+                            <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1">Current Status</p>
+                            <span className="px-3 py-1 bg-amber-100 text-amber-700 rounded-full text-xs font-bold uppercase tracking-wider">
+                              {user.status || 'Pending'}
+                            </span>
+                          </div>
+                          <button 
+                            onClick={handleLogout}
+                            className="w-full py-3 text-zinc-500 font-bold hover:text-zinc-900 transition-colors"
+                          >
+                            Logout
+                          </button>
+                        </motion.div>
+                      ) : (
                   <div className="space-y-8">
                     <motion.div 
                       initial={{ scale: 0.9, opacity: 0 }}
@@ -3189,6 +3606,7 @@ export default function App() {
                     </div>
                   </div>
                 </div>
+                      )
                     ) : (
                       <div className="text-center py-20 space-y-4">
                         <div className="w-20 h-20 bg-rose-50 rounded-full flex items-center justify-center mx-auto">
@@ -3204,6 +3622,61 @@ export default function App() {
               )}
             </AnimatePresence>
           </main>
+
+      {/* Toast Notification */}
+      <AnimatePresence>
+        {toast && (
+          <motion.div
+            initial={{ opacity: 0, y: 50, scale: 0.9 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 50, scale: 0.9 }}
+            className={`fixed bottom-8 left-1/2 -translate-x-1/2 z-[200] px-6 py-3 rounded-2xl shadow-2xl flex items-center gap-3 border ${
+              toast.type === 'success' ? 'bg-emerald-600 border-emerald-500' : 'bg-rose-600 border-rose-500'
+            } text-white`}
+          >
+            {toast.type === 'success' ? <CheckCircle2 className="w-5 h-5" /> : <AlertCircle className="w-5 h-5" />}
+            <span className="font-bold text-sm tracking-tight">{toast.message}</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Confirm Modal */}
+      <AnimatePresence>
+        {confirmModal && (
+          <div className="fixed inset-0 z-[150] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white w-full max-w-sm rounded-3xl overflow-hidden shadow-2xl border border-zinc-200"
+            >
+              <div className="p-8 text-center space-y-6">
+                <div className="w-16 h-16 bg-zinc-100 rounded-full flex items-center justify-center mx-auto">
+                  <AlertCircle className="w-8 h-8 text-zinc-900" />
+                </div>
+                <h3 className="text-xl font-bold text-zinc-900">{confirmModal.message}</h3>
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => setConfirmModal(null)}
+                    className="flex-1 py-3 rounded-xl font-bold text-zinc-500 bg-zinc-100 hover:bg-zinc-200 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => {
+                      confirmModal.onConfirm();
+                      setConfirmModal(null);
+                    }}
+                    className="flex-1 py-3 rounded-xl font-bold text-white bg-zinc-900 hover:bg-zinc-800 transition-colors shadow-lg shadow-zinc-200"
+                  >
+                    Confirm
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* Notification Modal */}
       <AnimatePresence>
@@ -3240,6 +3713,8 @@ export default function App() {
           </div>
         )}
       </AnimatePresence>
+      <div id="recaptcha-container-global" className="hidden"></div>
     </div>
+    </ErrorBoundary>
   );
 }
