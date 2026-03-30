@@ -569,7 +569,7 @@ export default function App() {
   const [etaInput, setEtaInput] = useState('');
   const [acceptingRideId, setAcceptingRideId] = useState<string | null>(null);
   const [isActionLoading, setIsActionLoading] = useState(false);
-  const [toast, setToast] = useState<{ message: string, type: 'success' | 'error' } | null>(null);
+  const [toast, setToast] = useState<{ message: string, type: 'success' | 'error', persistent?: boolean } | null>(null);
   const [confirmModal, setConfirmModal] = useState<{ message: string, onConfirm: () => void } | null>(null);
   const [isAudioUnlocked, setIsAudioUnlocked] = useState(false);
   const [pickupCoords, setPickupCoords] = useState<{ lat: number, lng: number } | null>(null);
@@ -590,7 +590,7 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (toast) {
+    if (toast && !toast.persistent) {
       const timer = setTimeout(() => setToast(null), 3000);
       return () => clearTimeout(timer);
     }
@@ -1210,11 +1210,11 @@ export default function App() {
   const handleAddAdmin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (user.role !== 'owner') {
-      alert("Only owners can manage admins!");
+      setToast({ message: "Only owners can manage admins!", type: 'error' });
       return;
     }
     if (newAdmin.role === 'owner') {
-      alert("Cannot create another owner via this form!");
+      setToast({ message: "Cannot create another owner via this form!", type: 'error' });
       return;
     }
     try {
@@ -1649,7 +1649,8 @@ export default function App() {
           if (driverSnap.exists()) {
             const currentBalance = driverSnap.data().wallet_balance || 0;
             if (currentBalance < withdrawalData.amount) {
-              return alert('Insufficient driver balance');
+              setToast({ message: 'Insufficient driver balance', type: 'error', persistent: true });
+              return;
             }
             await updateDoc(driverRef, { wallet_balance: currentBalance - withdrawalData.amount });
             await addDoc(collection(db, 'transactions'), {
@@ -1670,22 +1671,28 @@ export default function App() {
 
   const handleRequestWithdrawal = async () => {
     if (driverWallet.balance <= 0) {
-      alert('You have ₹0 balance. You cannot request a withdrawal.');
+      setToast({ message: 'You have ₹0 balance. You cannot request a withdrawal.', type: 'error', persistent: true });
       return;
     }
 
     const amountStr = prompt(`Enter amount to withdraw (Available: ₹${driverWallet.balance}):`);
     if (!amountStr) return;
     const amount = parseFloat(amountStr);
-    if (isNaN(amount) || amount <= 0) return alert('Invalid amount');
+    if (isNaN(amount) || amount <= 0) {
+      setToast({ message: 'Invalid amount', type: 'error' });
+      return;
+    }
 
     if (amount > driverWallet.balance) {
-      alert(`Insufficient balance! You only have ₹${driverWallet.balance}`);
+      setToast({ message: `Insufficient balance! You only have ₹${driverWallet.balance}`, type: 'error', persistent: true });
       return;
     }
 
     const bankDetails = prompt('Enter Bank Details (Account No, IFSC, etc.):');
-    if (!bankDetails) return alert('Bank details are required');
+    if (!bankDetails) {
+      setToast({ message: 'Bank details are required', type: 'error' });
+      return;
+    }
 
     try {
       await addDoc(collection(db, 'withdrawal_requests'), {
@@ -1696,7 +1703,7 @@ export default function App() {
         status: 'pending',
         created_at: new Date().toISOString()
       });
-      alert('Withdrawal request submitted!');
+      setToast({ message: 'Withdrawal request submitted!', type: 'success' });
     } catch (err) {
       handleFirestoreError(err, OperationType.CREATE, 'withdrawal_requests');
     }
@@ -1713,7 +1720,7 @@ export default function App() {
       });
       setUser({ ...user, password: changeCreds.password, pin: changeCreds.pin });
       setChangeCreds({ password: '', pin: '' });
-      alert('Credentials updated successfully!');
+      setToast({ message: 'Credentials updated successfully!', type: 'success' });
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `admins/${user.id}`);
     }
@@ -2055,7 +2062,28 @@ export default function App() {
     try {
       const rideRef = doc(db, 'rides', rideId);
       const rideSnap = await getDoc(rideRef);
+      
       if (rideSnap.exists() && rideSnap.data().status === 'pending') {
+        const rideData = rideSnap.data();
+        const commission = (rideData.fare || 0) * 0.10;
+
+        // Fetch latest driver balance
+        const driverRef = doc(db, 'drivers', user.id);
+        const driverSnap = await getDoc(driverRef);
+        const currentBalance = driverSnap.exists() ? (driverSnap.data().wallet_balance || 0) : 0;
+
+        if (currentBalance < commission) {
+          setToast({ 
+            message: `Insufficient balance! You need at least ₹${commission.toFixed(2)} (10% commission) in your wallet to accept this ride. Please recharge.`, 
+            type: 'error',
+            persistent: true
+          });
+          setIsActionLoading(false);
+          setAcceptingRideId(null);
+          setEtaInput('');
+          return;
+        }
+
         const startOtp = Math.floor(1000 + Math.random() * 9000).toString();
         const endOtp = Math.floor(1000 + Math.random() * 9000).toString();
         await updateDoc(rideRef, {
@@ -2070,7 +2098,6 @@ export default function App() {
         });
 
         // Send Notifications
-        const rideData = rideSnap.data();
         sendNotification('RIDE_ACCEPTED', {
           message: `Ride ${rideData?.tracking_id} accepted by driver ${user.name || user.username || 'Driver'}. ETA: ${etaInput} mins. Start OTP: ${startOtp}`,
           phone: rideData?.user_phone
@@ -2336,7 +2363,11 @@ export default function App() {
           >
             {toast.type === 'success' ? <CheckCircle2 className="w-5 h-5" /> : <X className="w-5 h-5" />}
             {toast.message}
-            <button onClick={() => setToast(null)} className="ml-2 opacity-50 hover:opacity-100">
+            <button 
+              onClick={() => setToast(null)} 
+              className={`ml-2 flex items-center gap-1 px-2 py-1 rounded-lg hover:bg-white/20 transition-colors ${toast.persistent ? 'bg-white/10' : 'opacity-50 hover:opacity-100'}`}
+            >
+              {toast.persistent && <span className="text-xs uppercase tracking-wider">Dismiss</span>}
               <X className="w-4 h-4" />
             </button>
           </motion.div>
