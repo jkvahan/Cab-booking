@@ -27,7 +27,8 @@ import {
   AlertCircle,
   Star,
   MessageSquare,
-  Trash2
+  Trash2,
+  Edit2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -241,9 +242,16 @@ interface Ride {
   rating?: number;
   review?: string;
   complaint?: string;
-  complaint_status?: 'pending' | 'resolved';
+  complaint_status?: 'pending' | 'resolved' | 'forwarded';
   complaint_reply?: string;
+  complaint_user_reply?: string;
+  complaint_driver_reply?: string;
   complaint_forwarded_to_driver?: boolean;
+  complaint_forwarded_to_admin_id?: string;
+  complaint_forwarded_to_admin_name?: string;
+  complaint_user_phone?: string;
+  complaint_driver_phone?: string;
+  complaint_admin_name?: string;
 }
 
 interface AdminUser {
@@ -264,8 +272,10 @@ interface AdminUser {
 interface Notification {
   id: string;
   message: string;
-  target: 'all_drivers' | 'all_users' | 'specific_driver';
+  target: 'all_drivers' | 'all_users' | 'specific_driver' | 'specific_user' | 'specific_admin' | 'admin_alert';
   driver_id?: string;
+  user_id?: string;
+  admin_id?: string;
   created_at: string;
   read_by: string[]; // List of user IDs who dismissed it
 }
@@ -488,7 +498,8 @@ export default function App() {
   const [newNotification, setNewNotification] = useState({
     message: '',
     target: 'all_drivers' as Notification['target'],
-    driver_id: ''
+    driver_id: '',
+    user_id: ''
   });
   const [isSendingNotification, setIsSendingNotification] = useState(false);
   const [adminDrivers, setAdminDrivers] = useState<any[]>([]);
@@ -515,6 +526,17 @@ export default function App() {
   const [editingUser, setEditingUser] = useState<any | null>(null);
   const [editingDriver, setEditingDriver] = useState<any | null>(null);
   const [isManualRideModalOpen, setIsManualRideModalOpen] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [selectedRides, setSelectedRides] = useState<string[]>([]);
+  const [isRidesBulkDeleteEnabled, setIsRidesBulkDeleteEnabled] = useState(false);
+  const [selectedTransactions, setSelectedTransactions] = useState<string[]>([]);
+  const [isTransactionsBulkDeleteEnabled, setIsTransactionsBulkDeleteEnabled] = useState(false);
+  const [isForgotPasswordModalOpen, setIsForgotPasswordModalOpen] = useState(false);
+  const [forgotPasswordType, setForgotPasswordType] = useState<'user' | 'driver'>('user');
+  const [forgotPasswordData, setForgotPasswordData] = useState({ phone: '', pin: '', newPassword: '' });
+  const [editingNotification, setEditingNotification] = useState<Notification | null>(null);
+  const [isEditingNotificationModalOpen, setIsEditingNotificationModalOpen] = useState(false);
+  const [adminNotifications, setAdminNotifications] = useState<Notification[]>([]);
   const [manualRideData, setManualRideData] = useState({
     pickup_location: '',
     dropoff_location: '',
@@ -530,10 +552,11 @@ export default function App() {
   const [reviewModal, setReviewModal] = useState<{ rideId: string, driverName: string } | null>(null);
   const [rating, setRating] = useState(5);
   const [reviewMessage, setReviewMessage] = useState('');
-  const [complaintModal, setComplaintModal] = useState<{ rideId: string, trackingId: string } | null>(null);
+  const [complaintModal, setComplaintModal] = useState<{ rideId: string, trackingId: string, driverPhone?: string } | null>(null);
   const [complaintMessage, setComplaintMessage] = useState('');
-  const [complaintReplyModal, setComplaintReplyModal] = useState<{ rideId: string, complaint: string, driverId?: string } | null>(null);
-  const [complaintReplyText, setComplaintReplyText] = useState('');
+  const [complaintReplyModal, setComplaintReplyModal] = useState<{ rideId: string, complaint: string, driverId?: string, userPhone?: string, driverPhone?: string } | null>(null);
+  const [complaintUserReply, setComplaintUserReply] = useState('');
+  const [complaintDriverReply, setComplaintDriverReply] = useState('');
   const [forwardToDriver, setForwardToDriver] = useState(false);
   const [forwardToAdminId, setForwardToAdminId] = useState<string>('');
 
@@ -675,7 +698,7 @@ export default function App() {
     } else {
       notifQuery = query(
         collection(db, 'notifications'),
-        where('target', '==', 'all_users'),
+        where('target', 'in', ['all_users', 'specific_user']),
         orderBy('created_at', 'desc'),
         limit(10)
       );
@@ -684,6 +707,9 @@ export default function App() {
     unsubscribeNotifications = onSnapshot(notifQuery, (snapshot) => {
       const notifs = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Notification));
       setNotifications(notifs);
+      if (view === 'admin') {
+        setAdminNotifications(notifs);
+      }
       
       // Find latest unread notification for current user
       const latest = notifs.find(n => {
@@ -692,6 +718,12 @@ export default function App() {
 
         // Extra client-side check for specific driver
         if (n.target === 'specific_driver' && n.driver_id !== user.id) return false;
+        
+        // Extra client-side check for specific user
+        if (n.target === 'specific_user' && n.user_id !== user.id) return false;
+
+        // Extra client-side check for specific admin
+        if (n.target === 'specific_admin' && n.admin_id !== user.id) return false;
         
         return true;
       });
@@ -971,9 +1003,18 @@ export default function App() {
 
           // Send Notifications
           sendNotification('RIDE_CANCELLED', {
-            message: `Ride ${rideData?.tracking_id} has been cancelled by the user.`,
+            message: `Ride ${rideData?.tracking_id} has been cancelled by the user (${rideData?.user_phone || 'N/A'}).`,
             phone: rideData?.user_phone
           });
+
+          // Add to notifications collection for admin/owner
+          await addDoc(collection(db, 'notifications'), {
+            message: `Ride ${rideData?.tracking_id} cancelled by user. Contact: ${rideData?.user_phone || 'N/A'}`,
+            target: 'admin_alert',
+            created_at: new Date().toISOString(),
+            read_by: []
+          });
+
           setToast({ message: "Ride Cancelled", type: 'success' });
         } catch (err) {
           handleFirestoreError(err, OperationType.UPDATE, `rides/${rideId}`);
@@ -1008,12 +1049,28 @@ export default function App() {
       setToast({ message: "Please enter your complaint message", type: 'error' });
       return;
     }
+
+    // Check if user has any existing unresolved complaint
+    const hasUnresolvedComplaint = myRides.some(ride => 
+      ride.complaint && (ride.complaint_status === 'pending' || ride.complaint_status === 'forwarded')
+    );
+
+    if (hasUnresolvedComplaint) {
+      setToast({ 
+        message: "You already have an active complaint. Please wait for it to be resolved before filing a new one.", 
+        type: 'error' 
+      });
+      return;
+    }
+
     setIsActionLoading(true);
     try {
       const rideRef = doc(db, 'rides', complaintModal.rideId);
       await updateDoc(rideRef, {
         complaint: complaintMessage,
-        complaint_status: 'pending'
+        complaint_status: 'pending',
+        complaint_user_phone: user.phone || '---',
+        complaint_driver_phone: complaintModal.driverPhone || '---'
       });
       setToast({ message: "Complaint submitted successfully. Admin will review it.", type: 'success' });
       setComplaintModal(null);
@@ -1197,7 +1254,7 @@ export default function App() {
         created_at: new Date().toISOString(),
         read_by: []
       });
-      setNewNotification({ message: '', target: 'all_drivers', driver_id: '' });
+      setNewNotification({ message: '', target: 'all_drivers', driver_id: '', user_id: '' });
       setToast({ message: 'Notification sent successfully!', type: 'success' });
     } catch (err) {
       handleFirestoreError(err, OperationType.CREATE, 'notifications');
@@ -1285,9 +1342,10 @@ export default function App() {
     }
   };
 
-  const handleSendComplaintReply = async () => {
-    if (!complaintReplyModal || !complaintReplyText.trim()) {
-      setToast({ message: "Please enter a reply message", type: 'error' });
+  const handleSendComplaintReply = async (shouldResolve: boolean = true) => {
+    if (!complaintReplyModal) return;
+    if (shouldResolve && !complaintUserReply.trim()) {
+      setToast({ message: "Please enter a reply for the user", type: 'error' });
       return;
     }
 
@@ -1295,34 +1353,47 @@ export default function App() {
     try {
       const rideRef = doc(db, 'rides', complaintReplyModal.rideId);
       const updateData: any = {
-        complaint_reply: complaintReplyText,
-        complaint_status: 'resolved'
+        complaint_user_reply: complaintUserReply,
+        complaint_driver_reply: complaintDriverReply,
+        complaint_reply: complaintUserReply, // General resolution message
+        complaint_admin_name: user.name || user.username || 'Admin'
       };
+
+      if (shouldResolve) {
+        updateData.complaint_status = 'resolved';
+      } else {
+        updateData.complaint_status = 'forwarded';
+      }
 
       if (forwardToDriver) {
         updateData.complaint_forwarded_to_driver = true;
       }
 
-      await updateDoc(rideRef, updateData);
-
-      // If forwarded to another admin, we could send a notification
       if (forwardToAdminId) {
+        updateData.complaint_forwarded_to_admin_id = forwardToAdminId;
         const admin = otherAdmins.find(a => a.id === forwardToAdminId);
         if (admin) {
-          await addDoc(collection(db, 'notifications'), {
-            message: `Forwarded Complaint: ${complaintReplyText}`,
-            target: 'specific_admin',
-            admin_id: forwardToAdminId,
-            created_at: new Date().toISOString(),
-            read: false
-          });
+          updateData.complaint_forwarded_to_admin_name = admin.username;
         }
+      }
+
+      await updateDoc(rideRef, updateData);
+
+      // If forwarded to another admin, send a notification
+      if (forwardToAdminId) {
+        await addDoc(collection(db, 'notifications'), {
+          message: `Forwarded Complaint: ${complaintUserReply || 'A complaint has been forwarded to you.'}`,
+          target: 'specific_admin',
+          admin_id: forwardToAdminId,
+          created_at: new Date().toISOString(),
+          read: false
+        });
       }
 
       // If forwarded to driver, send notification to driver
       if (forwardToDriver && complaintReplyModal.driverId) {
         await addDoc(collection(db, 'notifications'), {
-          message: `Complaint Update: ${complaintReplyText}`,
+          message: `Complaint Update: ${complaintDriverReply || 'A complaint has been forwarded to you.'}`,
           target: 'specific_driver',
           driver_id: complaintReplyModal.driverId,
           created_at: new Date().toISOString(),
@@ -1330,9 +1401,25 @@ export default function App() {
         });
       }
 
-      setToast({ message: "Reply sent and complaint updated", type: 'success' });
+      // Notification to user about complaint status
+      if (shouldResolve || forwardToAdminId || forwardToDriver) {
+        const rideDoc = await getDoc(rideRef);
+        const rideData = rideDoc.data() as Ride;
+        if (rideData.user_id) {
+          await addDoc(collection(db, 'notifications'), {
+            message: `Complaint Status: ${shouldResolve ? 'Resolved' : 'Forwarded'}. ${complaintUserReply}`,
+            target: 'specific_user',
+            user_id: rideData.user_id,
+            created_at: new Date().toISOString(),
+            read: false
+          });
+        }
+      }
+
+      setToast({ message: shouldResolve ? "Complaint resolved" : "Complaint forwarded", type: 'success' });
       setComplaintReplyModal(null);
-      setComplaintReplyText('');
+      setComplaintUserReply('');
+      setComplaintDriverReply('');
       setForwardToDriver(false);
       setForwardToAdminId('');
     } catch (err) {
@@ -1369,7 +1456,8 @@ export default function App() {
         distance: manualRideData.distance ? parseFloat(manualRideData.distance) : null,
         created_at: new Date().toISOString(),
         accepted_at: manualRideData.status !== 'pending' ? new Date().toISOString() : null,
-        completed_at: manualRideData.status === 'completed' ? new Date().toISOString() : null
+        started_at: manualRideData.status === 'ongoing' || manualRideData.status === 'completed' ? new Date().toISOString() : null,
+        completed_at: manualRideData.status === 'completed' ? new Date().toISOString() : null,
       };
 
       await addDoc(collection(db, 'rides'), rideData);
@@ -1390,6 +1478,151 @@ export default function App() {
       handleFirestoreError(err, OperationType.CREATE, 'rides');
     } finally {
       setIsActionLoading(false);
+    }
+  };
+
+  const handleForgotPassword = async () => {
+    if (!forgotPasswordData.phone || !forgotPasswordData.newPassword) {
+      setToast({ message: "Please fill all fields", type: 'error' });
+      return;
+    }
+
+    setIsActionLoading(true);
+    try {
+      const collectionName = forgotPasswordType === 'driver' ? 'drivers' : 'users';
+      const q = query(collection(db, collectionName), where('phone', '==', forgotPasswordData.phone));
+      const snapshot = await getDocs(q);
+
+      if (snapshot.empty) {
+        setToast({ message: "Account not found", type: 'error' });
+        return;
+      }
+
+      const accountDoc = snapshot.docs[0];
+      const accountData = accountDoc.data();
+
+      if (forgotPasswordType === 'driver') {
+        if (accountData.pin !== forgotPasswordData.pin) {
+          setToast({ message: "Invalid PIN", type: 'error' });
+          return;
+        }
+      } else {
+        if (accountData.name.toLowerCase() !== forgotPasswordData.pin.toLowerCase()) {
+          setToast({ message: "Verification failed (Name mismatch)", type: 'error' });
+          return;
+        }
+      }
+
+      await updateDoc(doc(db, collectionName, accountDoc.id), {
+        password: forgotPasswordData.newPassword
+      });
+
+      setToast({ message: "Password reset successful", type: 'success' });
+      setIsForgotPasswordModalOpen(false);
+      setForgotPasswordData({ phone: '', pin: '', newPassword: '' });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, 'accounts');
+    } finally {
+      setIsActionLoading(false);
+    }
+  };
+
+  const handleBulkDeleteRides = async () => {
+    if (user.role !== 'owner') return;
+    if (selectedRides.length === 0) return;
+
+    if (!window.confirm(`Are you sure you want to delete ${selectedRides.length} selected rides?`)) return;
+
+    setIsActionLoading(true);
+    try {
+      for (const rideId of selectedRides) {
+        await deleteDoc(doc(db, 'rides', rideId));
+      }
+      setToast({ message: `${selectedRides.length} rides deleted`, type: 'success' });
+      setSelectedRides([]);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, 'rides');
+    } finally {
+      setIsActionLoading(false);
+    }
+  };
+
+  const handleBulkDeleteTransactions = async () => {
+    if (user.role !== 'owner' && user.role !== 'admin') return;
+    if (selectedTransactions.length === 0) return;
+
+    if (!window.confirm(`Are you sure you want to delete ${selectedTransactions.length} selected transactions?`)) return;
+
+    setIsActionLoading(true);
+    try {
+      for (const txId of selectedTransactions) {
+        await deleteDoc(doc(db, 'transactions', txId));
+      }
+      setToast({ message: `${selectedTransactions.length} transactions deleted`, type: 'success' });
+      setSelectedTransactions([]);
+      if (selectedDriverTransactions) {
+        const updatedTxs = selectedDriverTransactions.transactions.filter(t => !selectedTransactions.includes(t.id));
+        setSelectedDriverTransactions({ ...selectedDriverTransactions, transactions: updatedTxs });
+      }
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, 'transactions');
+    } finally {
+      setIsActionLoading(false);
+    }
+  };
+
+  const handleDeleteNotification = async (notifId: string) => {
+    if (!user) return;
+    if (user.role !== 'owner' && !user.permissions?.notifications) return;
+    if (!window.confirm("Delete this notification?")) return;
+
+    try {
+      await deleteDoc(doc(db, 'notifications', notifId));
+      setToast({ message: "Notification deleted", type: 'success' });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, `notifications/${notifId}`);
+    }
+  };
+
+  const handleUpdateNotification = async () => {
+    if (!editingNotification) return;
+    setIsActionLoading(true);
+    try {
+      await updateDoc(doc(db, 'notifications', editingNotification.id), {
+        message: editingNotification.message,
+        target: editingNotification.target,
+        driver_id: editingNotification.driver_id || null,
+        user_id: editingNotification.user_id || null
+      });
+      setToast({ message: "Notification updated", type: 'success' });
+      setIsEditingNotificationModalOpen(false);
+      setEditingNotification(null);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `notifications/${editingNotification.id}`);
+    } finally {
+      setIsActionLoading(false);
+    }
+  };
+
+  const cleanupOldTransactions = async (driverId: string) => {
+    try {
+      const q = query(
+        collection(db, 'transactions'),
+        where('driver_id', '==', driverId)
+      );
+      const snapshot = await getDocs(q);
+      const now = new Date();
+      const batch = snapshot.docs.filter(doc => {
+        const createdAt = new Date(doc.data().created_at);
+        const diff = now.getTime() - createdAt.getTime();
+        return diff > 24 * 60 * 60 * 1000;
+      });
+
+      for (const d of batch) {
+        await deleteDoc(doc(db, 'transactions', d.id));
+      }
+    } catch (err) {
+      console.error("Cleanup error:", err);
     }
   };
 
@@ -2056,6 +2289,31 @@ export default function App() {
     );
   }
 
+  const filteredRides = adminRides.filter(r => 
+    r.tracking_id.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (r as any).user_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (r as any).user_phone?.includes(searchTerm) ||
+    (r as any).driver_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    r.pickup_location.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    r.dropoff_location.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  const filteredDrivers = adminDrivers.filter(d => 
+    d.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    d.phone.includes(searchTerm) ||
+    d.username?.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  const filteredUsers = adminUsers.filter(u => 
+    u.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    u.phone.includes(searchTerm)
+  );
+
+  const filteredWithdrawals = adminWithdrawals.filter(w => 
+    w.driver_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    w.driver_phone.includes(searchTerm)
+  );
+
   return (
     <ErrorBoundary>
       <div className="min-h-screen bg-[#f8fafc] font-sans text-zinc-900 overflow-x-hidden">
@@ -2162,6 +2420,21 @@ export default function App() {
                           value={userLoginData.password}
                           onChange={e => setUserLoginData({ ...userLoginData, password: e.target.value })}
                         />
+
+                        {userAuthMode === 'login' && (
+                          <div className="flex justify-end">
+                            <button 
+                              type="button"
+                              onClick={() => {
+                                setForgotPasswordType('user');
+                                setIsForgotPasswordModalOpen(true);
+                              }}
+                              className="text-xs font-bold text-zinc-500 hover:text-zinc-900 transition-colors"
+                            >
+                              Forgot Password?
+                            </button>
+                          </div>
+                        )}
                         
                         <motion.button 
                           whileHover={{ scale: 1.02 }}
@@ -2515,9 +2788,16 @@ export default function App() {
                                 )}
                               </div>
                               <div className="flex items-center gap-3">
-                                {(ride.status === 'accepted' || ride.status === 'ongoing') && (
+                                {(ride.status === 'accepted' || ride.status === 'ongoing') && !ride.complaint && (
                                   <button
-                                    onClick={() => setComplaintModal({ rideId: ride.id, trackingId: ride.tracking_id })}
+                                    onClick={() => {
+                                      const hasUnresolved = myRides.some(r => r.complaint && (r.complaint_status === 'pending' || r.complaint_status === 'forwarded'));
+                                      if (hasUnresolved) {
+                                        setToast({ message: "You already have an active complaint. Please wait for it to be resolved.", type: 'error' });
+                                      } else {
+                                        setComplaintModal({ rideId: ride.id, trackingId: ride.tracking_id, driverPhone: ride.driver_phone });
+                                      }
+                                    }}
                                     className="flex items-center gap-1 text-rose-600 text-[10px] font-bold hover:underline bg-rose-50 px-2 py-1 rounded-lg border border-rose-100"
                                   >
                                     <AlertCircle className="w-3 h-3" /> Complaint
@@ -2547,14 +2827,28 @@ export default function App() {
                                   <p className="text-[10px] font-bold text-rose-600 uppercase flex items-center gap-1">
                                     <AlertCircle className="w-3 h-3" /> Your Complaint
                                   </p>
-                                  <span className={`text-[8px] font-bold uppercase ${ride.complaint_status === 'resolved' ? 'text-emerald-600' : 'text-rose-500'}`}>
-                                    {ride.complaint_status || 'pending'}
-                                  </span>
+                                  <div className="flex items-center gap-2">
+                                    {ride.complaint_status === 'forwarded' && ride.complaint_forwarded_to_admin_name && (
+                                      <span className="text-[8px] bg-amber-100 text-amber-600 px-1.5 py-0.5 rounded font-bold uppercase">Forwarded to {ride.complaint_forwarded_to_admin_name}</span>
+                                    )}
+                                    {ride.complaint_forwarded_to_driver && (
+                                      <span className="text-[8px] bg-indigo-100 text-indigo-600 px-1.5 py-0.5 rounded font-bold uppercase">Forwarded to Driver</span>
+                                    )}
+                                    <span className={`text-[8px] font-bold uppercase ${ride.complaint_status === 'resolved' ? 'text-emerald-600' : ride.complaint_status === 'forwarded' ? 'text-amber-600' : 'text-rose-500'}`}>
+                                      {ride.complaint_status || 'pending'}
+                                    </span>
+                                  </div>
                                 </div>
                                 <p className="text-xs text-zinc-600 italic">"{ride.complaint}"</p>
-                                {ride.complaint_reply && (
+                                {ride.complaint_user_reply && (
                                   <div className="mt-2 p-2 bg-emerald-50 border border-emerald-100 rounded-lg">
-                                    <p className="text-[10px] font-bold text-emerald-600 uppercase">Response from Owner:</p>
+                                    <p className="text-[10px] font-bold text-emerald-600 uppercase">Response from {ride.complaint_admin_name || 'Admin'}:</p>
+                                    <p className="text-xs text-emerald-700 italic">{ride.complaint_user_reply}</p>
+                                  </div>
+                                )}
+                                {ride.complaint_reply && !ride.complaint_user_reply && (
+                                  <div className="mt-2 p-2 bg-emerald-50 border border-emerald-100 rounded-lg">
+                                    <p className="text-[10px] font-bold text-emerald-600 uppercase">Response from Admin:</p>
                                     <p className="text-xs text-emerald-700 italic">{ride.complaint_reply}</p>
                                   </div>
                                 )}
@@ -2823,6 +3117,20 @@ export default function App() {
                           </div>
                         </div>
 
+                        {/* Global Search Bar */}
+                        <div className="bg-white p-4 rounded-3xl border border-zinc-200 shadow-sm sticky top-20 z-40">
+                          <div className="relative">
+                            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-zinc-400" />
+                            <input 
+                              type="text"
+                              placeholder="Search rides, drivers, users, locations..."
+                              className="w-full pl-12 pr-4 py-4 bg-zinc-50 border border-zinc-200 rounded-2xl text-sm focus:outline-none focus:ring-2 focus:ring-zinc-900 font-medium"
+                              value={searchTerm}
+                              onChange={e => setSearchTerm(e.target.value)}
+                            />
+                          </div>
+                        </div>
+
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                           {(user.role === 'owner' || user.permissions?.rides || user.permissions?.drivers) && [
                             { label: 'Total Rides', value: adminRides.length, color: 'from-blue-500 to-indigo-600', icon: Car, show: user.role === 'owner' || user.permissions?.rides },
@@ -3061,6 +3369,7 @@ export default function App() {
                               <option value="all_drivers">All Drivers</option>
                               <option value="all_users">All Customers</option>
                               <option value="specific_driver">Specific Driver</option>
+                              <option value="specific_user">Specific User</option>
                             </select>
                           </div>
                           {newNotification.target === 'specific_driver' && (
@@ -3075,6 +3384,22 @@ export default function App() {
                                 <option value="">Select a driver...</option>
                                 {adminDrivers.map(d => (
                                   <option key={d.id} value={d.id}>{d.name} ({d.phone})</option>
+                                ))}
+                              </select>
+                            </div>
+                          )}
+                          {newNotification.target === 'specific_user' && (
+                            <div className="space-y-1">
+                              <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Select User</label>
+                              <select 
+                                className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-zinc-900"
+                                value={newNotification.user_id}
+                                onChange={e => setNewNotification({ ...newNotification, user_id: e.target.value })}
+                                required
+                              >
+                                <option value="">Select a user...</option>
+                                {adminUsers.map(u => (
+                                  <option key={u.id} value={u.id}>{u.name} ({u.phone})</option>
                                 ))}
                               </select>
                             </div>
@@ -3102,6 +3427,53 @@ export default function App() {
                           Send Notification
                         </button>
                       </form>
+
+                      {/* Sent Notifications List */}
+                      <div className="mt-8 pt-8 border-t border-zinc-100">
+                        <h4 className="text-sm font-black uppercase tracking-widest text-zinc-400 mb-4">Sent Notifications</h4>
+                        <div className="space-y-3">
+                          {adminNotifications.length === 0 ? (
+                            <p className="text-center text-zinc-500 py-4 text-sm">No notifications sent yet.</p>
+                          ) : (
+                            adminNotifications.map(notif => (
+                              <div key={notif.id} className="p-4 bg-zinc-50 rounded-2xl border border-zinc-100 flex justify-between items-start gap-4">
+                                <div className="flex-1">
+                                  <div className="flex items-center gap-2 mb-1">
+                                    <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded border ${
+                                      notif.target === 'all_drivers' ? 'bg-orange-50 text-orange-600 border-orange-100' :
+                                      notif.target === 'all_users' ? 'bg-blue-50 text-blue-600 border-blue-100' :
+                                      'bg-zinc-100 text-zinc-600 border-zinc-200'
+                                    }`}>
+                                      {notif.target.replace('_', ' ')}
+                                    </span>
+                                    <span className="text-[10px] text-zinc-400 font-medium">
+                                      {new Date(notif.created_at).toLocaleString()}
+                                    </span>
+                                  </div>
+                                  <p className="text-sm text-zinc-700 leading-relaxed">{notif.message}</p>
+                                </div>
+                                <div className="flex items-center gap-1">
+                                  <button 
+                                    onClick={() => {
+                                      setEditingNotification(notif);
+                                      setIsEditingNotificationModalOpen(true);
+                                    }}
+                                    className="p-2 hover:bg-white rounded-xl transition-all border border-transparent hover:border-zinc-200 shadow-sm"
+                                  >
+                                    <Edit2 className="w-4 h-4 text-zinc-400 hover:text-zinc-900" />
+                                  </button>
+                                  <button 
+                                    onClick={() => handleDeleteNotification(notif.id)}
+                                    className="p-2 hover:bg-rose-50 rounded-xl transition-all border border-transparent hover:border-rose-200 shadow-sm group"
+                                  >
+                                    <Trash2 className="w-4 h-4 text-zinc-400 group-hover:text-rose-600" />
+                                  </button>
+                                </div>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
                     </div>
                   </div>
                   )}
@@ -3115,10 +3487,10 @@ export default function App() {
                         </span>
                       </div>
                       <div className="divide-y divide-zinc-100">
-                      {adminWithdrawals.length === 0 ? (
+                      {filteredWithdrawals.length === 0 ? (
                         <p className="p-6 text-center text-zinc-500 text-sm">No withdrawal requests.</p>
                       ) : (
-                        adminWithdrawals.map(req => (
+                        filteredWithdrawals.map(req => (
                           <div key={req.id} className="p-4 flex items-center justify-between">
                             <div>
                               <p className="font-bold">{req.driver_name}</p>
@@ -3175,10 +3547,10 @@ export default function App() {
                         <User className="w-5 h-5 text-zinc-400" />
                       </div>
                       <div className="divide-y divide-zinc-100">
-                      {adminUsers.length === 0 ? (
+                      {filteredUsers.length === 0 ? (
                         <p className="p-6 text-center text-zinc-500 text-sm">No users found.</p>
                       ) : (
-                        adminUsers.map(u => (
+                        filteredUsers.map(u => (
                           <div key={u.id} className="p-4 flex items-center justify-between">
                             <div>
                               <p className="font-bold">{u.name}</p>
@@ -3226,10 +3598,10 @@ export default function App() {
                         <Users className="w-5 h-5 text-zinc-400" />
                       </div>
                       <div className="divide-y divide-zinc-100">
-                      {adminDrivers.length === 0 ? (
+                      {filteredDrivers.length === 0 ? (
                         <p className="p-6 text-center text-zinc-500 text-sm">No drivers found.</p>
                       ) : (
-                        adminDrivers.map(driver => (
+                        filteredDrivers.map(driver => (
                           <div key={driver.id} className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                             <div className="flex items-center gap-4">
                               <div className="relative">
@@ -3340,9 +3712,45 @@ export default function App() {
 
                   {(user.role === 'owner' || user.permissions?.rides) && (
                     <div className="bg-white rounded-2xl border border-zinc-200 overflow-hidden">
-                      <div className="p-6 border-b border-zinc-100 flex justify-between items-center">
-                        <h3 className="font-bold text-lg">Recent Rides</h3>
-                        {user.role === 'owner' && (
+                      <div className="p-6 border-b border-zinc-100 flex flex-col sm:flex-row justify-between items-center gap-4">
+                        <div className="flex items-center gap-3">
+                          <h3 className="font-bold text-lg">Recent Rides</h3>
+                          {user.role === 'owner' && (
+                            <div className="flex items-center gap-2">
+                              <button 
+                                onClick={() => setIsRidesBulkDeleteEnabled(!isRidesBulkDeleteEnabled)}
+                                className={`px-3 py-1.5 rounded-xl text-[10px] font-bold uppercase tracking-wider transition-all ${
+                                  isRidesBulkDeleteEnabled 
+                                  ? 'bg-zinc-900 text-white shadow-lg' 
+                                  : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
+                                }`}
+                              >
+                                {isRidesBulkDeleteEnabled ? 'Cancel Selection' : 'Select to Delete'}
+                              </button>
+                              {isRidesBulkDeleteEnabled && selectedRides.length > 0 && (
+                                <button 
+                                  onClick={handleBulkDeleteRides}
+                                  className="px-3 py-1.5 bg-rose-600 text-white rounded-xl text-[10px] font-bold uppercase tracking-wider hover:bg-rose-700 transition-all shadow-lg flex items-center gap-1.5"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                  Delete ({selectedRides.length})
+                                </button>
+                              )}
+                              {isRidesBulkDeleteEnabled && (
+                                <button 
+                                  onClick={() => {
+                                    const completedIds = filteredRides.filter(r => r.status === 'completed').map(r => r.id);
+                                    setSelectedRides(completedIds);
+                                  }}
+                                  className="px-3 py-1.5 bg-zinc-100 text-zinc-600 rounded-xl text-[10px] font-bold uppercase tracking-wider hover:bg-zinc-200 transition-all"
+                                >
+                                  Select All Completed
+                                </button>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                        {(user.role === 'owner' || user.permissions?.rides) && (
                           <button 
                             onClick={() => setIsManualRideModalOpen(true)}
                             className="flex items-center gap-2 px-4 py-2 bg-zinc-900 text-white rounded-xl text-xs font-bold hover:bg-zinc-800 transition-all shadow-lg"
@@ -3356,6 +3764,7 @@ export default function App() {
                       <table className="w-full text-left">
                         <thead className="bg-zinc-50 text-xs font-bold uppercase text-zinc-400">
                           <tr>
+                            {isRidesBulkDeleteEnabled && <th className="px-6 py-4"></th>}
                             <th className="px-6 py-4">ID</th>
                             <th className="px-6 py-4">User</th>
                             <th className="px-6 py-4">Driver</th>
@@ -3368,10 +3777,33 @@ export default function App() {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-zinc-100">
-                          {adminRides.map(ride => (
-                            <tr key={ride.id} className="text-sm">
+                          {filteredRides.map(ride => (
+                            <tr key={ride.id} className={`text-sm transition-colors ${selectedRides.includes(ride.id) ? 'bg-rose-50/50' : ''}`}>
+                              {isRidesBulkDeleteEnabled && (
+                                <td className="px-6 py-4">
+                                  {ride.status === 'completed' ? (
+                                    <input 
+                                      type="checkbox"
+                                      className="w-4 h-4 rounded border-zinc-300 text-rose-600 focus:ring-rose-500"
+                                      checked={selectedRides.includes(ride.id)}
+                                      onChange={() => {
+                                        if (selectedRides.includes(ride.id)) {
+                                          setSelectedRides(selectedRides.filter(id => id !== ride.id));
+                                        } else {
+                                          setSelectedRides([...selectedRides, ride.id]);
+                                        }
+                                      }}
+                                    />
+                                  ) : (
+                                    <div className="w-4 h-4" />
+                                  )}
+                                </td>
+                              )}
                               <td className="px-6 py-4 font-mono text-xs">{ride.tracking_id}</td>
-                              <td className="px-6 py-4 font-medium">{(ride as any).user_name || 'Guest'}</td>
+                              <td className="px-6 py-4 font-medium">
+                                <div>{(ride as any).user_name || 'Guest'}</div>
+                                <div className="text-[10px] text-zinc-500 font-bold">{(ride as any).user_phone || '---'}</div>
+                              </td>
                               <td className="px-6 py-4 font-medium">{(ride as any).driver_name || '---'}</td>
                               <td className="px-6 py-4">
                                 <p className="truncate max-w-[150px] font-bold">{ride.pickup_location} → {ride.dropoff_location}</p>
@@ -3415,13 +3847,35 @@ export default function App() {
                                     {ride.review && <p className="text-[9px] text-zinc-500 italic max-w-[120px] truncate" title={ride.review}>"{ride.review}"</p>}
                                   </div>
                                 )}
-                                {ride.complaint && (
+                                {ride.complaint && (user.role === 'owner' || ride.complaint_forwarded_to_admin_id === user.id) && (
                                   <div className="p-1.5 bg-rose-50 border border-rose-100 rounded-lg">
                                     <p className="text-[9px] font-bold text-rose-600 uppercase flex items-center gap-1">
                                       <AlertCircle className="w-2.5 h-2.5" /> Complaint
                                     </p>
                                     <p className="text-[9px] text-rose-700 italic mb-1 whitespace-pre-wrap" title={ride.complaint}>"{ride.complaint}"</p>
-                                    {ride.complaint_reply && (
+                                    <div className="flex gap-3 mb-1 pb-1 border-b border-rose-100">
+                                      <div>
+                                        <p className="text-[7px] font-bold text-zinc-400 uppercase">User Phone</p>
+                                        <p className="text-[8px] font-bold">{ride.complaint_user_phone || ride.user_phone || '---'}</p>
+                                      </div>
+                                      <div>
+                                        <p className="text-[7px] font-bold text-zinc-400 uppercase">Driver Phone</p>
+                                        <p className="text-[8px] font-bold">{ride.complaint_driver_phone || ride.driver_phone || '---'}</p>
+                                      </div>
+                                    </div>
+                                    {ride.complaint_user_reply && (
+                                      <div className="mt-1 pt-1 border-t border-rose-100">
+                                        <p className="text-[8px] font-bold text-emerald-600 uppercase">User Reply:</p>
+                                        <p className="text-[9px] text-emerald-700 italic">{ride.complaint_user_reply}</p>
+                                      </div>
+                                    )}
+                                    {ride.complaint_driver_reply && (
+                                      <div className="mt-1 pt-1 border-t border-rose-100">
+                                        <p className="text-[8px] font-bold text-indigo-600 uppercase">Driver Reply:</p>
+                                        <p className="text-[9px] text-indigo-700 italic">{ride.complaint_driver_reply}</p>
+                                      </div>
+                                    )}
+                                    {ride.complaint_reply && !ride.complaint_user_reply && (
                                       <div className="mt-1 pt-1 border-t border-rose-100">
                                         <p className="text-[8px] font-bold text-emerald-600 uppercase">Reply:</p>
                                         <p className="text-[9px] text-emerald-700 italic">{ride.complaint_reply}</p>
@@ -3434,18 +3888,30 @@ export default function App() {
                                       <div className="flex gap-1">
                                         {user.role === 'owner' && (
                                           <button 
-                                            onClick={() => setComplaintReplyModal({ rideId: ride.id, complaint: ride.complaint, driverId: ride.driver_id })}
+                                            onClick={() => setComplaintReplyModal({ 
+                                              rideId: ride.id, 
+                                              complaint: ride.complaint, 
+                                              driverId: ride.driver_id,
+                                              userPhone: ride.complaint_user_phone || ride.user_phone,
+                                              driverPhone: ride.complaint_driver_phone || ride.driver_phone
+                                            })}
                                             className="text-[7px] bg-white border border-indigo-200 px-1 py-0.5 rounded text-indigo-600 font-bold hover:bg-indigo-50"
                                           >
                                             Reply / Forward
                                           </button>
                                         )}
-                                        {ride.complaint_status !== 'resolved' && (
+                                        {ride.complaint_status !== 'resolved' && (user.role === 'owner' || ride.complaint_forwarded_to_admin_id === user.id) && (
                                           <button 
-                                            onClick={() => handleResolveComplaint(ride.id)}
+                                            onClick={() => setComplaintReplyModal({ 
+                                              rideId: ride.id, 
+                                              complaint: ride.complaint, 
+                                              driverId: ride.driver_id,
+                                              userPhone: ride.complaint_user_phone || ride.user_phone,
+                                              driverPhone: ride.complaint_driver_phone || ride.driver_phone
+                                            })}
                                             className="text-[7px] bg-white border border-rose-200 px-1 py-0.5 rounded text-rose-600 font-bold hover:bg-rose-50"
                                           >
-                                            Resolve
+                                            Resolve with Message
                                           </button>
                                         )}
                                       </div>
@@ -3483,9 +3949,48 @@ export default function App() {
                         <div className="p-6 border-b border-zinc-100 flex justify-between items-center bg-zinc-900 text-white">
                           <div>
                             <h3 className="font-bold text-xl">{selectedDriverTransactions.name}'s Transactions</h3>
-                            <p className="text-xs opacity-60">Full history of wallet movements</p>
+                            <div className="flex items-center gap-2 mt-1">
+                              <p className="text-xs opacity-60">Full history of wallet movements</p>
+                              {(user.role === 'owner' || user.role === 'admin') && (
+                                <div className="flex items-center gap-2 ml-4">
+                                  <button 
+                                    onClick={() => setIsTransactionsBulkDeleteEnabled(!isTransactionsBulkDeleteEnabled)}
+                                    className={`px-2 py-1 rounded-lg text-[8px] font-bold uppercase tracking-wider transition-all ${
+                                      isTransactionsBulkDeleteEnabled 
+                                      ? 'bg-white text-zinc-900' 
+                                      : 'bg-white/10 text-white hover:bg-white/20'
+                                    }`}
+                                  >
+                                    {isTransactionsBulkDeleteEnabled ? 'Cancel Selection' : 'Select to Delete'}
+                                  </button>
+                                  {isTransactionsBulkDeleteEnabled && selectedTransactions.length > 0 && (
+                                    <button 
+                                      onClick={handleBulkDeleteTransactions}
+                                      className="px-2 py-1 bg-rose-600 text-white rounded-lg text-[8px] font-bold uppercase tracking-wider hover:bg-rose-700 transition-all"
+                                    >
+                                      Delete ({selectedTransactions.length})
+                                    </button>
+                                  )}
+                                  {isTransactionsBulkDeleteEnabled && (
+                                    <button 
+                                      onClick={() => {
+                                        const allIds = selectedDriverTransactions.transactions.map((t: any) => t.id);
+                                        setSelectedTransactions(allIds);
+                                      }}
+                                      className="px-2 py-1 bg-white/10 text-white rounded-lg text-[8px] font-bold uppercase tracking-wider hover:bg-white/20 transition-all"
+                                    >
+                                      Select All
+                                    </button>
+                                  )}
+                                </div>
+                              )}
+                            </div>
                           </div>
-                          <button onClick={() => setSelectedDriverTransactions(null)} className="p-2 hover:bg-white/10 rounded-full transition-colors">
+                          <button onClick={() => {
+                            setSelectedDriverTransactions(null);
+                            setIsTransactionsBulkDeleteEnabled(false);
+                            setSelectedTransactions([]);
+                          }} className="p-2 hover:bg-white/10 rounded-full transition-colors">
                             <X className="w-6 h-6" />
                           </button>
                         </div>
@@ -3495,10 +4000,30 @@ export default function App() {
                               <p className="text-center text-zinc-500 py-8">No transactions found.</p>
                             ) : (
                               selectedDriverTransactions.transactions.map((t: any) => (
-                                <div key={t.id} className="p-4 bg-zinc-50 rounded-2xl border border-zinc-100 flex justify-between items-center">
-                                  <div>
-                                    <p className="font-bold text-sm">{t.description}</p>
-                                    <p className="text-[10px] text-zinc-400">{new Date(t.created_at).toLocaleString()}</p>
+                                <div key={t.id} className={`p-4 rounded-2xl border transition-all flex justify-between items-center ${
+                                  selectedTransactions.includes(t.id) 
+                                  ? 'bg-rose-50 border-rose-200' 
+                                  : 'bg-zinc-50 border-zinc-100'
+                                }`}>
+                                  <div className="flex items-center gap-3">
+                                    {isTransactionsBulkDeleteEnabled && (
+                                      <input 
+                                        type="checkbox"
+                                        className="w-4 h-4 rounded border-zinc-300 text-rose-600 focus:ring-rose-500"
+                                        checked={selectedTransactions.includes(t.id)}
+                                        onChange={() => {
+                                          if (selectedTransactions.includes(t.id)) {
+                                            setSelectedTransactions(selectedTransactions.filter(id => id !== t.id));
+                                          } else {
+                                            setSelectedTransactions([...selectedTransactions, t.id]);
+                                          }
+                                        }}
+                                      />
+                                    )}
+                                    <div>
+                                      <p className="font-bold text-sm">{t.description}</p>
+                                      <p className="text-[10px] text-zinc-400">{new Date(t.created_at).toLocaleString()}</p>
+                                    </div>
                                   </div>
                                   <p className={`font-black ${t.type === 'credit' ? 'text-emerald-600' : 'text-rose-600'}`}>
                                     {t.type === 'credit' ? '+' : '-'}₹{t.amount}
@@ -3516,28 +4041,54 @@ export default function App() {
                       <motion.div 
                         initial={{ opacity: 0, scale: 0.9 }}
                         animate={{ opacity: 1, scale: 1 }}
-                        className="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden"
+                        className="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
                       >
-                        <div className="p-6 border-b border-zinc-100 flex justify-between items-center bg-rose-600 text-white">
+                        <div className="p-6 border-b border-zinc-100 flex justify-between items-center bg-rose-600 text-white shrink-0">
                           <h3 className="font-bold text-xl">Reply to Complaint</h3>
                           <button onClick={() => setComplaintReplyModal(null)} className="p-2 hover:bg-white/10 rounded-full transition-colors">
                             <X className="w-6 h-6" />
                           </button>
                         </div>
-                        <div className="p-6 space-y-4">
-                          <div className="p-4 bg-rose-50 rounded-2xl border border-rose-100">
-                            <p className="text-xs font-bold text-rose-600 uppercase mb-1">User Complaint:</p>
-                            <p className="text-sm text-rose-700 italic">"{complaintReplyModal.complaint}"</p>
+                        <div className="p-6 space-y-4 overflow-y-auto">
+                          <div className="p-4 bg-rose-50 rounded-2xl border border-rose-100 space-y-2">
+                            <div className="flex justify-between items-start">
+                              <div>
+                                <p className="text-xs font-bold text-rose-600 uppercase mb-1">User Complaint:</p>
+                                <p className="text-sm text-rose-700 italic">"{complaintReplyModal.complaint}"</p>
+                              </div>
+                            </div>
+                            <div className="flex gap-4 pt-2 border-t border-rose-200 mt-2">
+                              <div>
+                                <p className="text-[10px] font-bold text-zinc-500 uppercase">User Phone</p>
+                                <p className="text-xs font-bold">{complaintReplyModal.userPhone || '---'}</p>
+                              </div>
+                              <div>
+                                <p className="text-[10px] font-bold text-zinc-500 uppercase">Driver Phone</p>
+                                <p className="text-xs font-bold">{complaintReplyModal.driverPhone || '---'}</p>
+                              </div>
+                            </div>
                           </div>
 
-                          <div className="space-y-1">
-                            <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Your Reply</label>
-                            <textarea
-                              className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-2xl text-sm min-h-[120px] focus:ring-2 focus:ring-rose-500 focus:border-transparent outline-none transition-all"
-                              placeholder="Type your reply here..."
-                              value={complaintReplyText}
-                              onChange={e => setComplaintReplyText(e.target.value)}
-                            />
+                          <div className="space-y-4">
+                            <div className="space-y-1">
+                              <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Resolution Message for User</label>
+                              <textarea
+                                className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-2xl text-sm min-h-[80px] focus:ring-2 focus:ring-rose-500 focus:border-transparent outline-none transition-all"
+                                placeholder="Explain what was resolved for the user..."
+                                value={complaintUserReply}
+                                onChange={e => setComplaintUserReply(e.target.value)}
+                              />
+                            </div>
+
+                            <div className="space-y-1">
+                              <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Message for Driver (Optional)</label>
+                              <textarea
+                                className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-2xl text-sm min-h-[80px] focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all"
+                                placeholder="Instructions or feedback for the driver..."
+                                value={complaintDriverReply}
+                                onChange={e => setComplaintDriverReply(e.target.value)}
+                              />
+                            </div>
                           </div>
 
                           <div className="space-y-3 pt-2">
@@ -3552,7 +4103,7 @@ export default function App() {
                               />
                               <div className="flex-1">
                                 <p className="text-sm font-bold text-zinc-900">Forward to Driver</p>
-                                <p className="text-[10px] text-zinc-500">The driver will be able to see this complaint and your reply.</p>
+                                <p className="text-[10px] text-zinc-500">The driver will see the complaint and your "Reply to Driver".</p>
                               </div>
                             </label>
 
@@ -3571,17 +4122,30 @@ export default function App() {
                             </div>
                           </div>
 
-                          <button 
-                            onClick={handleSendComplaintReply}
-                            disabled={isActionLoading || !complaintReplyText.trim()}
-                            className="w-full bg-rose-600 text-white py-4 rounded-2xl font-bold hover:bg-rose-700 transition-all shadow-lg shadow-rose-200 disabled:opacity-50 disabled:shadow-none flex items-center justify-center gap-2"
-                          >
-                            {isActionLoading ? (
-                              <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                            ) : (
-                              <>Send Reply & Resolve</>
-                            )}
-                          </button>
+                          <div className="grid grid-cols-2 gap-3">
+                            <button 
+                              onClick={() => handleSendComplaintReply(false)}
+                              disabled={isActionLoading || (!forwardToDriver && !forwardToAdminId)}
+                              className="w-full bg-zinc-100 text-zinc-900 py-4 rounded-2xl font-bold hover:bg-zinc-200 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                            >
+                              {isActionLoading ? (
+                                <div className="w-5 h-5 border-2 border-zinc-300 border-t-zinc-900 rounded-full animate-spin" />
+                              ) : (
+                                <>Forward Only</>
+                              )}
+                            </button>
+                            <button 
+                              onClick={() => handleSendComplaintReply(true)}
+                              disabled={isActionLoading || !complaintUserReply.trim()}
+                              className="w-full bg-rose-600 text-white py-4 rounded-2xl font-bold hover:bg-rose-700 transition-all shadow-lg shadow-rose-200 disabled:opacity-50 disabled:shadow-none flex items-center justify-center gap-2"
+                            >
+                              {isActionLoading ? (
+                                <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                              ) : (
+                                <>Resolve & Send Replies</>
+                              )}
+                            </button>
+                          </div>
                         </div>
                       </motion.div>
                     </div>
@@ -3839,6 +4403,20 @@ export default function App() {
                               value={loginData.password}
                               onChange={e => setLoginData({ ...loginData, password: e.target.value })}
                             />
+                            {driverAuthMode === 'login' && (
+                              <div className="flex justify-end">
+                                <button 
+                                  type="button"
+                                  onClick={() => {
+                                    setForgotPasswordType('driver');
+                                    setIsForgotPasswordModalOpen(true);
+                                  }}
+                                  className="text-xs font-bold text-zinc-500 hover:text-zinc-900 transition-colors"
+                                >
+                                  Forgot Password?
+                                </button>
+                              </div>
+                            )}
                           </>
                         ) : (
                           <div className="space-y-4">
@@ -4010,12 +4588,23 @@ export default function App() {
                           </div>
                           {ride.complaint && ride.complaint_forwarded_to_driver && (
                             <div className="mt-2 p-3 bg-rose-50 border border-rose-100 rounded-xl space-y-2">
-                              <div className="flex items-center gap-2 text-rose-600">
-                                <AlertCircle className="w-4 h-4" />
-                                <p className="text-xs font-bold uppercase">Complaint Received</p>
+                              <div className="flex items-center justify-between text-rose-600">
+                                <div className="flex items-center gap-2">
+                                  <AlertCircle className="w-4 h-4" />
+                                  <p className="text-xs font-bold uppercase">Complaint Received</p>
+                                </div>
+                                <span className={`text-[8px] font-bold uppercase ${ride.complaint_status === 'resolved' ? 'text-emerald-600' : 'text-rose-500'}`}>
+                                  {ride.complaint_status || 'pending'}
+                                </span>
                               </div>
                               <p className="text-sm text-rose-700 italic">"{ride.complaint}"</p>
-                              {ride.complaint_reply && (
+                              {ride.complaint_driver_reply && (
+                                <div className="pt-2 border-t border-rose-100">
+                                  <p className="text-[10px] font-bold text-indigo-600 uppercase">Admin Message for You:</p>
+                                  <p className="text-xs text-indigo-700 italic">{ride.complaint_driver_reply}</p>
+                                </div>
+                              )}
+                              {ride.complaint_reply && !ride.complaint_driver_reply && (
                                 <div className="pt-2 border-t border-rose-100">
                                   <p className="text-[10px] font-bold text-emerald-600 uppercase">Admin Reply:</p>
                                   <p className="text-xs text-emerald-700 italic">{ride.complaint_reply}</p>
@@ -4263,12 +4852,18 @@ export default function App() {
                                 )}
                               </div>
                             )}
-                            {ride.complaint && (
+                            {ride.complaint && ride.complaint_forwarded_to_driver && (
                               <div className="mt-3 p-3 bg-rose-50 rounded-xl border border-rose-100 space-y-1">
                                 <p className="text-[10px] font-bold text-rose-600 uppercase flex items-center gap-1">
-                                  <AlertCircle className="w-3 h-3" /> Complaint Filed
+                                  <AlertCircle className="w-3 h-3" /> Complaint Received
                                 </p>
                                 <p className="text-xs text-rose-700 italic leading-relaxed">"{ride.complaint}"</p>
+                                {ride.complaint_driver_reply && (
+                                  <div className="mt-2 p-2 bg-indigo-50 border border-indigo-100 rounded-lg">
+                                    <p className="text-[10px] font-bold text-indigo-600 uppercase">Admin Message for You:</p>
+                                    <p className="text-xs text-indigo-700 italic">{ride.complaint_driver_reply}</p>
+                                  </div>
+                                )}
                                 <p className={`text-[8px] font-bold uppercase ${ride.complaint_status === 'resolved' ? 'text-emerald-600' : 'text-rose-500'}`}>
                                   Status: {ride.complaint_status || 'pending'}
                                 </p>
@@ -4552,6 +5147,166 @@ export default function App() {
                   className="flex-1 px-6 py-3 bg-zinc-900 text-white rounded-2xl text-sm font-bold hover:bg-zinc-800 transition-all shadow-lg disabled:opacity-50"
                 >
                   {isActionLoading ? 'Adding...' : 'Add Ride Record'}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {isForgotPasswordModalOpen && (
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.9 }}
+              className="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden"
+            >
+              <div className="p-6 border-b border-zinc-100 flex justify-between items-center bg-zinc-900 text-white">
+                <div>
+                  <h3 className="font-bold text-xl tracking-tight">Reset Password</h3>
+                  <p className="text-xs opacity-60">Reset your {forgotPasswordType} account password</p>
+                </div>
+                <button onClick={() => setIsForgotPasswordModalOpen(false)} className="p-2 hover:bg-white/10 rounded-full transition-colors">
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+              <div className="p-6 space-y-4">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-zinc-400 ml-1">Phone Number</label>
+                  <input 
+                    type="text" 
+                    placeholder="Enter registered phone number"
+                    className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl text-sm focus:ring-2 focus:ring-zinc-900 outline-none"
+                    value={forgotPasswordData.phone}
+                    onChange={e => setForgotPasswordData({...forgotPasswordData, phone: e.target.value})}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-zinc-400 ml-1">
+                    {forgotPasswordType === 'driver' ? 'Driver PIN' : 'Account Name (Verification)'}
+                  </label>
+                  <input 
+                    type="text" 
+                    placeholder={forgotPasswordType === 'driver' ? "Enter your 4-digit PIN" : "Enter your full name"}
+                    className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl text-sm focus:ring-2 focus:ring-zinc-900 outline-none"
+                    value={forgotPasswordData.pin}
+                    onChange={e => setForgotPasswordData({...forgotPasswordData, pin: e.target.value})}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-zinc-400 ml-1">New Password</label>
+                  <input 
+                    type="password" 
+                    placeholder="Enter new password"
+                    className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl text-sm focus:ring-2 focus:ring-zinc-900 outline-none"
+                    value={forgotPasswordData.newPassword}
+                    onChange={e => setForgotPasswordData({...forgotPasswordData, newPassword: e.target.value})}
+                  />
+                </div>
+              </div>
+              <div className="p-6 bg-zinc-50 flex gap-3">
+                <button 
+                  onClick={() => setIsForgotPasswordModalOpen(false)}
+                  className="flex-1 px-6 py-3 bg-white border border-zinc-200 rounded-2xl text-sm font-bold hover:bg-zinc-100 transition-all"
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={handleForgotPassword}
+                  disabled={isActionLoading}
+                  className="flex-1 px-6 py-3 bg-zinc-900 text-white rounded-2xl text-sm font-bold hover:bg-zinc-800 transition-all shadow-lg disabled:opacity-50"
+                >
+                  {isActionLoading ? 'Resetting...' : 'Update Password'}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {isEditingNotificationModalOpen && editingNotification && (
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.9 }}
+              className="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden"
+            >
+              <div className="p-6 border-b border-zinc-100 flex justify-between items-center bg-zinc-900 text-white">
+                <div>
+                  <h3 className="font-bold text-xl tracking-tight">Edit Notification</h3>
+                  <p className="text-xs opacity-60">Update notification message or target</p>
+                </div>
+                <button onClick={() => setIsEditingNotificationModalOpen(false)} className="p-2 hover:bg-white/10 rounded-full transition-colors">
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+              <div className="p-6 space-y-4">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-zinc-400 ml-1">Message</label>
+                  <textarea 
+                    placeholder="Enter notification message"
+                    className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl text-sm focus:ring-2 focus:ring-zinc-900 outline-none min-h-[100px]"
+                    value={editingNotification.message}
+                    onChange={e => setEditingNotification({...editingNotification, message: e.target.value})}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-zinc-400 ml-1">Target Audience</label>
+                  <select 
+                    className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl text-sm focus:ring-2 focus:ring-zinc-900 outline-none"
+                    value={editingNotification.target}
+                    onChange={e => setEditingNotification({...editingNotification, target: e.target.value as any})}
+                  >
+                    <option value="all_drivers">All Drivers</option>
+                    <option value="all_users">All Customers</option>
+                    <option value="specific_driver">Specific Driver</option>
+                    <option value="specific_user">Specific User</option>
+                  </select>
+                </div>
+                {editingNotification.target === 'specific_driver' && (
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-zinc-400 ml-1">Select Driver</label>
+                    <select 
+                      className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl text-sm focus:ring-2 focus:ring-zinc-900 outline-none"
+                      value={editingNotification.driver_id || ''}
+                      onChange={e => setEditingNotification({...editingNotification, driver_id: e.target.value})}
+                    >
+                      <option value="">Select a driver...</option>
+                      {adminDrivers.map(d => (
+                        <option key={d.id} value={d.id}>{d.name} ({d.phone})</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                {editingNotification.target === 'specific_user' && (
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-zinc-400 ml-1">Select User</label>
+                    <select 
+                      className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl text-sm focus:ring-2 focus:ring-zinc-900 outline-none"
+                      value={editingNotification.user_id || ''}
+                      onChange={e => setEditingNotification({...editingNotification, user_id: e.target.value})}
+                    >
+                      <option value="">Select a user...</option>
+                      {adminUsers.map(u => (
+                        <option key={u.id} value={u.id}>{u.name} ({u.phone})</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+              <div className="p-6 bg-zinc-50 flex gap-3">
+                <button 
+                  onClick={() => setIsEditingNotificationModalOpen(false)}
+                  className="flex-1 px-6 py-3 bg-white border border-zinc-200 rounded-2xl text-sm font-bold hover:bg-zinc-100 transition-all"
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={handleUpdateNotification}
+                  disabled={isActionLoading}
+                  className="flex-1 px-6 py-3 bg-zinc-900 text-white rounded-2xl text-sm font-bold hover:bg-zinc-800 transition-all shadow-lg disabled:opacity-50"
+                >
+                  {isActionLoading ? 'Updating...' : 'Save Changes'}
                 </button>
               </div>
             </motion.div>
