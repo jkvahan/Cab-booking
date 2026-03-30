@@ -80,6 +80,7 @@
         "dropoff_lng": { "type": "number" },
         "status": { "type": "string", "enum": ["pending", "accepted", "ongoing", "completed", "cancelled"] },
         "fare": { "type": "number" },
+        "discount": { "type": "number", "description": "Discount amount applied to the ride" },
         "vehicle_type": { "type": "string" },
         "driver_id": { "type": "string" },
         "user_id": { "type": "string" },
@@ -97,6 +98,8 @@
         "review": { "type": "string", "description": "User review message" },
         "complaint": { "type": "string", "description": "User complaint message" },
         "complaint_status": { "type": "string", "enum": ["pending", "resolved"], "description": "Status of the complaint" },
+        "complaint_reply": { "type": "string", "description": "Admin reply to the complaint" },
+        "complaint_forwarded_to_driver": { "type": "boolean", "description": "Whether the complaint has been forwarded to the driver" },
         "created_at": { "type": "string", "format": "date-time" },
         "started_at": { "type": "string", "format": "date-time" },
         "eta": { "type": "number" }

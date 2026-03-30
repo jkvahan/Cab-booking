@@ -220,6 +220,7 @@ interface Ride {
   dropoff_location: string;
   status: RideStatus;
   fare: number;
+  discount?: number;
   vehicle_type: string;
   driver_id?: string;
   user_id?: string;
@@ -241,6 +242,8 @@ interface Ride {
   review?: string;
   complaint?: string;
   complaint_status?: 'pending' | 'resolved';
+  complaint_reply?: string;
+  complaint_forwarded_to_driver?: boolean;
 }
 
 interface AdminUser {
@@ -529,6 +532,10 @@ export default function App() {
   const [reviewMessage, setReviewMessage] = useState('');
   const [complaintModal, setComplaintModal] = useState<{ rideId: string, trackingId: string } | null>(null);
   const [complaintMessage, setComplaintMessage] = useState('');
+  const [complaintReplyModal, setComplaintReplyModal] = useState<{ rideId: string, complaint: string, driverId?: string } | null>(null);
+  const [complaintReplyText, setComplaintReplyText] = useState('');
+  const [forwardToDriver, setForwardToDriver] = useState(false);
+  const [forwardToAdminId, setForwardToAdminId] = useState<string>('');
 
   // Driver Data
   const [availableRides, setAvailableRides] = useState<Ride[]>([]);
@@ -1278,6 +1285,63 @@ export default function App() {
     }
   };
 
+  const handleSendComplaintReply = async () => {
+    if (!complaintReplyModal || !complaintReplyText.trim()) {
+      setToast({ message: "Please enter a reply message", type: 'error' });
+      return;
+    }
+
+    setIsActionLoading(true);
+    try {
+      const rideRef = doc(db, 'rides', complaintReplyModal.rideId);
+      const updateData: any = {
+        complaint_reply: complaintReplyText,
+        complaint_status: 'resolved'
+      };
+
+      if (forwardToDriver) {
+        updateData.complaint_forwarded_to_driver = true;
+      }
+
+      await updateDoc(rideRef, updateData);
+
+      // If forwarded to another admin, we could send a notification
+      if (forwardToAdminId) {
+        const admin = otherAdmins.find(a => a.id === forwardToAdminId);
+        if (admin) {
+          await addDoc(collection(db, 'notifications'), {
+            message: `Forwarded Complaint: ${complaintReplyText}`,
+            target: 'specific_admin',
+            admin_id: forwardToAdminId,
+            created_at: new Date().toISOString(),
+            read: false
+          });
+        }
+      }
+
+      // If forwarded to driver, send notification to driver
+      if (forwardToDriver && complaintReplyModal.driverId) {
+        await addDoc(collection(db, 'notifications'), {
+          message: `Complaint Update: ${complaintReplyText}`,
+          target: 'specific_driver',
+          driver_id: complaintReplyModal.driverId,
+          created_at: new Date().toISOString(),
+          read: false
+        });
+      }
+
+      setToast({ message: "Reply sent and complaint updated", type: 'success' });
+      setComplaintReplyModal(null);
+      setComplaintReplyText('');
+      setForwardToDriver(false);
+      setForwardToAdminId('');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `rides/${complaintReplyModal.rideId}`);
+    } finally {
+      setIsActionLoading(false);
+    }
+  };
+
   const handleManualAddRide = async () => {
     if (user.role !== 'owner') return;
     if (!manualRideData.pickup_location || !manualRideData.dropoff_location || !manualRideData.fare || !manualRideData.user_name || !manualRideData.user_phone) {
@@ -1695,6 +1759,7 @@ export default function App() {
         dropoff_location: bookingData.dropoff,
         distance: estimatedDistance,
         fare: selectedOption.fare,
+        discount: selectedOption.discount || 0,
         vehicle_type: selectedOption.type,
         trip_type: bookingData.tripType,
         pickup_date: bookingData.pickupDate,
@@ -2363,6 +2428,11 @@ export default function App() {
                               </div>
                               <div className="text-right relative z-10">
                                 <p className="text-base font-black">₹{option.fare}</p>
+                                {option.discount > 0 && (
+                                  <p className="text-[8px] font-black text-emerald-500 uppercase tracking-tighter">
+                                    Saved ₹{option.discount}
+                                  </p>
+                                )}
                                 <p className={`text-[7px] font-bold uppercase tracking-widest ${selectedOption?.type === option.type ? 'text-zinc-500' : 'text-zinc-400'}`}>Incl. taxes</p>
                               </div>
                             </motion.button>
@@ -2432,6 +2502,9 @@ export default function App() {
                                 ) : (
                                   <span className="px-2 py-1 rounded text-[10px] font-bold uppercase bg-zinc-100 text-zinc-700">Single Trip</span>
                                 )}
+                                {ride.discount && ride.discount > 0 && (
+                                  <span className="px-2 py-1 rounded text-[10px] font-bold uppercase bg-emerald-100 text-emerald-700">₹{ride.discount} Saved</span>
+                                )}
                                 {ride.distance && (
                                   <span className="text-[10px] font-bold text-zinc-400 uppercase">{ride.distance} KM</span>
                                 )}
@@ -2479,6 +2552,12 @@ export default function App() {
                                   </span>
                                 </div>
                                 <p className="text-xs text-zinc-600 italic">"{ride.complaint}"</p>
+                                {ride.complaint_reply && (
+                                  <div className="mt-2 p-2 bg-emerald-50 border border-emerald-100 rounded-lg">
+                                    <p className="text-[10px] font-bold text-emerald-600 uppercase">Response from Owner:</p>
+                                    <p className="text-xs text-emerald-700 italic">{ride.complaint_reply}</p>
+                                  </div>
+                                )}
                               </div>
                             )}
                             {ride.status === 'accepted' && (
@@ -2619,6 +2698,9 @@ export default function App() {
                         <div className="text-right">
                           <p className="text-xs text-zinc-400 font-bold uppercase">Fare</p>
                           <p className="text-lg font-bold">₹{trackedRide.fare}</p>
+                          {trackedRide.discount && trackedRide.discount > 0 && (
+                            <p className="text-[10px] font-bold text-emerald-600 uppercase">Saved ₹{trackedRide.discount}</p>
+                          )}
                         </div>
                       </div>
 
@@ -3307,6 +3389,11 @@ export default function App() {
                                   <span className="text-[8px] bg-zinc-100 text-zinc-500 px-1 py-0.5 rounded font-bold uppercase">
                                     Req: {new Date(ride.created_at).toLocaleDateString()}
                                   </span>
+                                  {ride.vehicle_type && (
+                                    <span className="text-[8px] bg-indigo-100 text-indigo-600 px-1 py-0.5 rounded font-bold uppercase">
+                                      {ride.vehicle_type}
+                                    </span>
+                                  )}
                                 </div>
                               </td>
                               <td className="px-6 py-4 font-medium">{(ride as any).distance || '---'}</td>
@@ -3315,7 +3402,10 @@ export default function App() {
                                   {getStatusLabel(ride.status)}
                                 </span>
                               </td>
-                              <td className="px-6 py-4 font-bold">₹{ride.fare}</td>
+                              <td className="px-6 py-4 font-bold">
+                                <div>₹{ride.fare}</div>
+                                {ride.discount > 0 && <div className="text-[10px] text-emerald-600">(-₹{ride.discount})</div>}
+                              </td>
                               <td className="px-6 py-4">
                                 {ride.rating && (
                                   <div className="flex flex-col gap-1 mb-1">
@@ -3330,19 +3420,35 @@ export default function App() {
                                     <p className="text-[9px] font-bold text-rose-600 uppercase flex items-center gap-1">
                                       <AlertCircle className="w-2.5 h-2.5" /> Complaint
                                     </p>
-                                    <p className="text-[9px] text-rose-700 italic mb-1 line-clamp-1" title={ride.complaint}>"{ride.complaint}"</p>
-                                    <div className="flex justify-between items-center">
+                                    <p className="text-[9px] text-rose-700 italic mb-1 whitespace-pre-wrap" title={ride.complaint}>"{ride.complaint}"</p>
+                                    {ride.complaint_reply && (
+                                      <div className="mt-1 pt-1 border-t border-rose-100">
+                                        <p className="text-[8px] font-bold text-emerald-600 uppercase">Reply:</p>
+                                        <p className="text-[9px] text-emerald-700 italic">{ride.complaint_reply}</p>
+                                      </div>
+                                    )}
+                                    <div className="flex justify-between items-center mt-1">
                                       <span className={`text-[7px] font-bold uppercase ${ride.complaint_status === 'resolved' ? 'text-emerald-600' : 'text-rose-500'}`}>
                                         {ride.complaint_status || 'pending'}
                                       </span>
-                                      {ride.complaint_status !== 'resolved' && (
-                                        <button 
-                                          onClick={() => handleResolveComplaint(ride.id)}
-                                          className="text-[7px] bg-white border border-rose-200 px-1 py-0.5 rounded text-rose-600 font-bold hover:bg-rose-50"
-                                        >
-                                          Resolve
-                                        </button>
-                                      )}
+                                      <div className="flex gap-1">
+                                        {user.role === 'owner' && (
+                                          <button 
+                                            onClick={() => setComplaintReplyModal({ rideId: ride.id, complaint: ride.complaint, driverId: ride.driver_id })}
+                                            className="text-[7px] bg-white border border-indigo-200 px-1 py-0.5 rounded text-indigo-600 font-bold hover:bg-indigo-50"
+                                          >
+                                            Reply / Forward
+                                          </button>
+                                        )}
+                                        {ride.complaint_status !== 'resolved' && (
+                                          <button 
+                                            onClick={() => handleResolveComplaint(ride.id)}
+                                            className="text-[7px] bg-white border border-rose-200 px-1 py-0.5 rounded text-rose-600 font-bold hover:bg-rose-50"
+                                          >
+                                            Resolve
+                                          </button>
+                                        )}
+                                      </div>
                                     </div>
                                   </div>
                                 )}
@@ -3405,6 +3511,82 @@ export default function App() {
                       </motion.div>
                     </div>
                   )}
+                  {complaintReplyModal && (
+                    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                      <motion.div 
+                        initial={{ opacity: 0, scale: 0.9 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        className="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden"
+                      >
+                        <div className="p-6 border-b border-zinc-100 flex justify-between items-center bg-rose-600 text-white">
+                          <h3 className="font-bold text-xl">Reply to Complaint</h3>
+                          <button onClick={() => setComplaintReplyModal(null)} className="p-2 hover:bg-white/10 rounded-full transition-colors">
+                            <X className="w-6 h-6" />
+                          </button>
+                        </div>
+                        <div className="p-6 space-y-4">
+                          <div className="p-4 bg-rose-50 rounded-2xl border border-rose-100">
+                            <p className="text-xs font-bold text-rose-600 uppercase mb-1">User Complaint:</p>
+                            <p className="text-sm text-rose-700 italic">"{complaintReplyModal.complaint}"</p>
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Your Reply</label>
+                            <textarea
+                              className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-2xl text-sm min-h-[120px] focus:ring-2 focus:ring-rose-500 focus:border-transparent outline-none transition-all"
+                              placeholder="Type your reply here..."
+                              value={complaintReplyText}
+                              onChange={e => setComplaintReplyText(e.target.value)}
+                            />
+                          </div>
+
+                          <div className="space-y-3 pt-2">
+                            <p className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Forward Options</p>
+                            
+                            <label className="flex items-center gap-3 p-3 bg-zinc-50 rounded-xl cursor-pointer hover:bg-zinc-100 transition-colors">
+                              <input 
+                                type="checkbox" 
+                                checked={forwardToDriver}
+                                onChange={(e) => setForwardToDriver(e.target.checked)}
+                                className="w-5 h-5 rounded border-zinc-300 text-rose-600 focus:ring-rose-500"
+                              />
+                              <div className="flex-1">
+                                <p className="text-sm font-bold text-zinc-900">Forward to Driver</p>
+                                <p className="text-[10px] text-zinc-500">The driver will be able to see this complaint and your reply.</p>
+                              </div>
+                            </label>
+
+                            <div className="space-y-1">
+                              <p className="text-xs font-medium text-zinc-600">Forward to Admin</p>
+                              <select
+                                className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-xl text-sm"
+                                value={forwardToAdminId}
+                                onChange={e => setForwardToAdminId(e.target.value)}
+                              >
+                                <option value="">Select Admin (Optional)</option>
+                                {otherAdmins.map(admin => (
+                                  <option key={admin.id} value={admin.id}>{admin.username} ({admin.role})</option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
+
+                          <button 
+                            onClick={handleSendComplaintReply}
+                            disabled={isActionLoading || !complaintReplyText.trim()}
+                            className="w-full bg-rose-600 text-white py-4 rounded-2xl font-bold hover:bg-rose-700 transition-all shadow-lg shadow-rose-200 disabled:opacity-50 disabled:shadow-none flex items-center justify-center gap-2"
+                          >
+                            {isActionLoading ? (
+                              <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                            ) : (
+                              <>Send Reply & Resolve</>
+                            )}
+                          </button>
+                        </div>
+                      </motion.div>
+                    </div>
+                  )}
+
                   {editingAdmin && (
                     <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
                       <motion.div 
@@ -3807,7 +3989,8 @@ export default function App() {
                       </h3>
                       <div className="space-y-3">
                         {completedRides.map(ride => (
-                          <div key={ride.id} className="p-4 bg-zinc-50 rounded-xl border border-zinc-100 flex justify-between items-center">
+                          <React.Fragment key={ride.id}>
+                            <div className="p-4 bg-zinc-50 rounded-xl border border-zinc-100 flex justify-between items-center">
                             <div>
                               <p className="text-sm font-bold">{ride.pickup_location} → {ride.dropoff_location}</p>
                               <div className="flex items-center gap-2 mt-1">
@@ -3819,10 +4002,29 @@ export default function App() {
                             </div>
                             <div className="text-right">
                               <p className="font-bold text-emerald-600">₹{ride.fare}</p>
+                              {ride.vehicle_type && (
+                                <p className="text-[10px] font-bold text-indigo-600 uppercase">{ride.vehicle_type}</p>
+                              )}
                               <span className="text-[10px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded font-bold uppercase">Completed</span>
                             </div>
                           </div>
-                        ))}
+                          {ride.complaint && ride.complaint_forwarded_to_driver && (
+                            <div className="mt-2 p-3 bg-rose-50 border border-rose-100 rounded-xl space-y-2">
+                              <div className="flex items-center gap-2 text-rose-600">
+                                <AlertCircle className="w-4 h-4" />
+                                <p className="text-xs font-bold uppercase">Complaint Received</p>
+                              </div>
+                              <p className="text-sm text-rose-700 italic">"{ride.complaint}"</p>
+                              {ride.complaint_reply && (
+                                <div className="pt-2 border-t border-rose-100">
+                                  <p className="text-[10px] font-bold text-emerald-600 uppercase">Admin Reply:</p>
+                                  <p className="text-xs text-emerald-700 italic">{ride.complaint_reply}</p>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </React.Fragment>
+                      ))}
                       </div>
                     </div>
                   )}
@@ -3887,6 +4089,11 @@ export default function App() {
                               <div className="text-right">
                                 <p className="text-xs font-bold text-zinc-400 uppercase">Fare</p>
                                 <p className="text-xl font-bold text-emerald-600">₹{ride.fare}</p>
+                                {ride.vehicle_type && (
+                                  <p className="text-[10px] font-black text-indigo-600 uppercase bg-indigo-50 px-1.5 py-0.5 rounded mt-1">
+                                    {ride.vehicle_type}
+                                  </p>
+                                )}
                               </div>
                             </div>
 

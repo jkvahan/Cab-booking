@@ -11,6 +11,7 @@ export interface FareOption {
   type: string;
   fare: number;
   description: string;
+  discount?: number;
 }
 
 export async function calculateRealFare(
@@ -22,6 +23,7 @@ export async function calculateRealFare(
 ) {
   const calculateOptions = (distanceKm: number) => {
     const baseMultiplier = tripType === 'round' ? (2 * 0.90) : 1;
+    const standardMultiplier = tripType === 'round' ? 2 : 1;
     
     // Cancellation Penalty: 2% for each consecutive cancellation
     const penaltyMultiplier = 1 + (consecutiveCancellations * 0.02);
@@ -44,12 +46,15 @@ export async function calculateRealFare(
         }
       }
 
+      const standardFare = (rates.base + (distanceKm * currentPerKm)) * standardMultiplier;
       const baseFare = (rates.base + (distanceKm * currentPerKm)) * baseMultiplier;
-      const finalFare = baseFare * penaltyMultiplier * discountMultiplier;
+      const finalFare = Math.round(baseFare * penaltyMultiplier * discountMultiplier);
+      const discount = Math.max(0, Math.round(standardFare - finalFare));
 
       return {
         type,
-        fare: Math.round(finalFare),
+        fare: finalFare,
+        discount,
         description: rates.description
       };
     });
