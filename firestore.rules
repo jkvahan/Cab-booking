@@ -110,22 +110,18 @@ service cloud.firestore {
     match /users/{userId} {
       // Allow read for login verification (manual auth)
       allow read: if true;
-      allow create: if true; // Allow registration
-      allow update: if true; // Allow updates (including from manual admin)
+      allow write: if true; // Allow create, update, delete
     }
 
     match /drivers/{driverId} {
       // Allow read for login verification (manual auth)
       allow read: if true;
-      allow create: if true; // Allow registration
-      allow update: if true; // Allow updates (including from manual admin)
+      allow write: if true; // Allow create, update, delete
     }
 
     match /rides/{rideId} {
       // Permissive read for manual auth mode
-      allow read: if true;
-      allow create: if isValidRide(request.resource.data);
-      allow update: if isValidRide(request.resource.data);
+      allow read, write: if true;
     }
 
     match /transactions/{transactionId} {
@@ -134,9 +130,7 @@ service cloud.firestore {
     }
 
     match /withdrawal_requests/{requestId} {
-      allow read: if true;
-      allow create: if true;
-      allow update: if true;
+      allow read, write: if true;
     }
 
     match /notifications/{notificationId} {
