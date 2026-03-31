@@ -402,6 +402,8 @@ export default function App() {
     testConnection();
 
     // Check for saved manual session first
+    // Removed to ensure login page on open as per user request
+    /*
     const savedUser = localStorage.getItem('vahan_user');
     if (savedUser) {
       try {
@@ -410,6 +412,7 @@ export default function App() {
         localStorage.removeItem('vahan_user');
       }
     }
+    */
 
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
@@ -461,6 +464,7 @@ export default function App() {
     dropoff: '', 
     tripType: 'single' as 'single' | 'round',
     manualDistance: '',
+    passengers: '1',
     pickupDate: new Date().toISOString().split('T')[0],
     pickupTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
   });
@@ -483,7 +487,15 @@ export default function App() {
   // Driver Auth States
   const [driverAuthMode, setDriverAuthMode] = useState<'login' | 'register'>('login');
   const [driverLoginStep, setDriverLoginStep] = useState<'credentials' | 'pin'>('credentials');
-  const [loginData, setLoginData] = useState({ phone: '', name: '', pin: '', username: '', password: '' });
+  const [loginData, setLoginData] = useState({ 
+    phone: '', 
+    name: '', 
+    pin: '', 
+    username: '', 
+    password: '',
+    vehicle_number: '',
+    vehicle_seats: '4'
+  });
   const [driverPin, setDriverPin] = useState('');
   const [tempDriverId, setTempDriverId] = useState<string | null>(null);
 
@@ -1856,6 +1868,8 @@ export default function App() {
         phone: loginData.phone,
         password: loginData.password,
         pin: loginData.pin,
+        vehicle_number: loginData.vehicle_number,
+        vehicle_seats: parseInt(loginData.vehicle_seats),
         wallet_balance: 0,
         status: 'pending',
         created_at: new Date().toISOString(),
@@ -2022,6 +2036,7 @@ export default function App() {
         fare: selectedOption.fare,
         discount: selectedOption.discount || 0,
         vehicle_type: selectedOption.type,
+        passengers: parseInt(bookingData.passengers),
         trip_type: bookingData.tripType,
         pickup_date: bookingData.pickupDate,
         pickup_time: bookingData.pickupTime,
@@ -2043,6 +2058,7 @@ export default function App() {
         dropoff: '', 
         tripType: 'single', 
         manualDistance: '',
+        passengers: '1',
         pickupDate: new Date().toISOString().split('T')[0],
         pickupTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
       });
@@ -2116,6 +2132,14 @@ export default function App() {
       
       if (rideSnap.exists() && rideSnap.data().status === 'pending') {
         const rideData = rideSnap.data();
+        
+        // Check vehicle capacity
+        if (user.vehicle_seats && rideData.passengers > user.vehicle_seats) {
+          setError(`Your vehicle (${user.vehicle_seats} seats) cannot accommodate ${rideData.passengers} passengers.`);
+          setIsActionLoading(false);
+          return;
+        }
+
         const startOtp = Math.floor(1000 + Math.random() * 9000).toString();
         const endOtp = Math.floor(1000 + Math.random() * 9000).toString();
         await updateDoc(rideRef, {
@@ -2674,6 +2698,32 @@ export default function App() {
                           />
                         </div>
                       </motion.div>
+
+                      <motion.div 
+                        initial={{ y: 20, opacity: 0 }}
+                        animate={{ y: 0, opacity: 1 }}
+                        transition={{ delay: 0.5 }}
+                        className="relative group"
+                      >
+                        <Users className="absolute left-4 top-4 w-5 h-5 text-zinc-400 group-focus-within:scale-110 transition-transform" />
+                        <motion.select
+                          whileFocus={{ scale: 1.01 }}
+                          className="w-full pl-12 pr-4 py-4 bg-white/50 border border-zinc-200 rounded-2xl focus:outline-none focus:ring-4 focus:ring-zinc-900/5 focus:bg-white transition-all shadow-sm hover:shadow-md appearance-none"
+                          value={bookingData.passengers}
+                          onChange={e => {
+                            setBookingData({ ...bookingData, passengers: e.target.value });
+                            setFareOptions([]);
+                          }}
+                        >
+                          {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16].map(num => (
+                            <option key={num} value={num}>{num} Passenger{num > 1 ? 's' : ''}</option>
+                          ))}
+                        </motion.select>
+                        <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none">
+                          <ArrowRight className="w-4 h-4 text-zinc-400 rotate-90" />
+                        </div>
+                        <p className="text-[10px] font-bold text-zinc-400 mt-2 ml-2 uppercase tracking-widest">Select number of people</p>
+                      </motion.div>
                     </div>
 
                     {fareOptions.length === 0 ? (
@@ -2708,47 +2758,57 @@ export default function App() {
                           </div>
                         )}
                         <div className="grid grid-cols-1 gap-4">
-                          {fareOptions.map((option, idx) => (
-                            <motion.button
-                              key={option.type}
-                              initial={{ x: -20, opacity: 0 }}
-                              animate={{ x: 0, opacity: 1 }}
-                              transition={{ delay: idx * 0.1 }}
-                              onClick={() => setSelectedOption(option)}
-                              className={`flex items-center justify-between p-2 rounded-2xl border-2 transition-all relative overflow-hidden group ${
-                                selectedOption?.type === option.type 
-                                ? 'border-zinc-900 bg-zinc-900 text-white shadow-2xl -translate-y-0.5' 
-                                : 'glass p-2 hover:border-zinc-300 hover:-translate-y-0.5 shadow-sm hover:shadow-md'
-                              }`}
-                            >
-                              {selectedOption?.type === option.type && (
-                                <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-white/10 to-transparent rounded-full -mr-16 -mt-16 blur-2xl" />
-                              )}
-                              <div className="flex items-center gap-2 relative z-10">
-                                <div className={`p-1 rounded-lg transition-colors ${selectedOption?.type === option.type ? 'bg-white/20' : 'bg-zinc-100'}`}>
-                                  <Car className={`w-4 h-4 ${selectedOption?.type === option.type ? 'text-white' : 'text-zinc-900'}`} />
-                                </div>
-                                <div className="text-left">
-                                  <div className="flex items-center gap-1">
-                                    <p className="font-black text-xs">{option.type}</p>
-                                    <span className={`text-[7px] px-1 py-0.5 rounded-full font-black uppercase tracking-widest ${selectedOption?.type === option.type ? 'bg-white/20 text-white' : 'bg-zinc-200 text-zinc-600'}`}>
-                                      {VEHICLE_RATES[option.type as keyof typeof VEHICLE_RATES]?.description}
-                                    </span>
-                                  </div>
-                                  <p className={`text-[8px] font-medium ${selectedOption?.type === option.type ? 'text-zinc-400' : 'text-zinc-500'}`}>Available • 2-5 min away</p>
-                                </div>
-                              </div>
-                              <div className="text-right relative z-10">
-                                <p className="text-base font-black">₹{option.fare}</p>
-                                {option.discount > 0 && (
-                                  <p className="text-[8px] font-black text-emerald-500 uppercase tracking-tighter">
-                                    Saved ₹{option.discount}
-                                  </p>
+                          {fareOptions.filter(option => option.seats >= parseInt(bookingData.passengers)).length === 0 ? (
+                            <div className="p-8 text-center bg-rose-50 rounded-2xl border border-rose-100 space-y-2">
+                              <AlertCircle className="w-8 h-8 text-rose-500 mx-auto" />
+                              <p className="text-sm font-bold text-rose-900">No Vehicles Available</p>
+                              <p className="text-xs text-rose-600">We don't have vehicles that can accommodate {bookingData.passengers} passengers. Please try a smaller group or multiple bookings.</p>
+                            </div>
+                          ) : (
+                            fareOptions
+                              .filter(option => option.seats >= parseInt(bookingData.passengers))
+                              .map((option, idx) => (
+                              <motion.button
+                                key={option.type}
+                                initial={{ x: -20, opacity: 0 }}
+                                animate={{ x: 0, opacity: 1 }}
+                                transition={{ delay: idx * 0.1 }}
+                                onClick={() => setSelectedOption(option)}
+                                className={`flex items-center justify-between p-2 rounded-2xl border-2 transition-all relative overflow-hidden group ${
+                                  selectedOption?.type === option.type 
+                                  ? 'border-zinc-900 bg-zinc-900 text-white shadow-2xl -translate-y-0.5' 
+                                  : 'glass p-2 hover:border-zinc-300 hover:-translate-y-0.5 shadow-sm hover:shadow-md'
+                                }`}
+                              >
+                                {selectedOption?.type === option.type && (
+                                  <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-white/10 to-transparent rounded-full -mr-16 -mt-16 blur-2xl" />
                                 )}
-                                <p className={`text-[7px] font-bold uppercase tracking-widest ${selectedOption?.type === option.type ? 'text-zinc-500' : 'text-zinc-400'}`}>Incl. taxes</p>
-                              </div>
-                            </motion.button>
-                          ))}
+                                <div className="flex items-center gap-2 relative z-10">
+                                  <div className={`p-1 rounded-lg transition-colors ${selectedOption?.type === option.type ? 'bg-white/20' : 'bg-zinc-100'}`}>
+                                    <Car className={`w-4 h-4 ${selectedOption?.type === option.type ? 'text-white' : 'text-zinc-900'}`} />
+                                  </div>
+                                  <div className="text-left">
+                                    <div className="flex items-center gap-1">
+                                      <p className="font-black text-xs">{option.type}</p>
+                                      <span className={`text-[7px] px-1 py-0.5 rounded-full font-black uppercase tracking-widest ${selectedOption?.type === option.type ? 'bg-white/20 text-white' : 'bg-zinc-200 text-zinc-600'}`}>
+                                        {option.seats} Seater
+                                      </span>
+                                    </div>
+                                    <p className={`text-[8px] font-medium ${selectedOption?.type === option.type ? 'text-zinc-400' : 'text-zinc-500'}`}>Available • 2-5 min away</p>
+                                  </div>
+                                </div>
+                                <div className="text-right relative z-10">
+                                  <p className="text-base font-black">₹{option.fare}</p>
+                                  {option.discount > 0 && (
+                                    <p className="text-[8px] font-black text-emerald-500 uppercase tracking-tighter">
+                                      Saved ₹{option.discount}
+                                    </p>
+                                  )}
+                                  <p className={`text-[7px] font-bold uppercase tracking-widest ${selectedOption?.type === option.type ? 'text-zinc-500' : 'text-zinc-400'}`}>Incl. taxes</p>
+                                </div>
+                              </motion.button>
+                            ))
+                          )}
                         </div>
                         <motion.button
                           whileHover={{ scale: 1.02 }}
@@ -2819,6 +2879,11 @@ export default function App() {
                                 )}
                                 {ride.distance && (
                                   <span className="text-[10px] font-bold text-zinc-400 uppercase">{ride.distance} KM</span>
+                                )}
+                                {(ride as any).passengers && (
+                                  <span className="text-[10px] font-bold text-zinc-400 uppercase flex items-center gap-1">
+                                    <Users className="w-3 h-3" /> {(ride as any).passengers} Pax
+                                  </span>
                                 )}
                                 {ride.pickup_date && (
                                   <span className="text-[10px] font-bold text-emerald-600 uppercase flex items-center gap-1">
@@ -4403,7 +4468,7 @@ export default function App() {
                   
                   <form onSubmit={driverAuthMode === 'login' ? handleDriverLogin : handleDriverRegister} className="space-y-4">
                         {driverAuthMode === 'register' && (
-                          <>
+                          <div className="space-y-4">
                             <input
                               type="text"
                               placeholder="Full Name"
@@ -4412,6 +4477,26 @@ export default function App() {
                               value={loginData.name}
                               onChange={e => setLoginData({ ...loginData, name: e.target.value })}
                             />
+                            <div className="grid grid-cols-2 gap-4">
+                              <input
+                                type="text"
+                                placeholder="Vehicle Number"
+                                required
+                                className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900"
+                                value={loginData.vehicle_number}
+                                onChange={e => setLoginData({ ...loginData, vehicle_number: e.target.value })}
+                              />
+                              <select
+                                required
+                                className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900"
+                                value={loginData.vehicle_seats}
+                                onChange={e => setLoginData({ ...loginData, vehicle_seats: e.target.value })}
+                              >
+                                {[4, 7, 10, 16].map(num => (
+                                  <option key={num} value={num.toString()}>{num} Seater</option>
+                                ))}
+                              </select>
+                            </div>
                             <input
                               type="password"
                               placeholder="Set 4-Digit Security PIN"
@@ -4421,7 +4506,7 @@ export default function App() {
                               value={loginData.pin}
                               onChange={e => setLoginData({ ...loginData, pin: e.target.value })}
                             />
-                          </>
+                          </div>
                         )}
                         
                         {driverLoginStep === 'credentials' ? (
@@ -4696,14 +4781,16 @@ export default function App() {
                         </button>
                       )}
                     </div>
-                    {availableRides.length === 0 ? (
+                    {availableRides.filter(ride => !user.vehicle_seats || (ride as any).passengers <= user.vehicle_seats).length === 0 ? (
                       <div className="bg-white p-12 rounded-2xl border border-zinc-200 text-center space-y-2">
-                        <p className="text-zinc-500">No rides available right now.</p>
-                        <p className="text-sm text-zinc-400">Stay online to receive requests.</p>
+                        <p className="text-zinc-500">No suitable rides available right now.</p>
+                        <p className="text-sm text-zinc-400">Rides matching your vehicle capacity will appear here.</p>
                       </div>
                     ) : (
                       <div className="grid grid-cols-1 gap-4">
-                        {availableRides.map(ride => (
+                        {availableRides
+                          .filter(ride => !user.vehicle_seats || (ride as any).passengers <= user.vehicle_seats)
+                          .map(ride => (
                           <div key={ride.id} className="bg-white p-6 rounded-2xl border border-zinc-200 shadow-sm space-y-4">
                             <div className="flex justify-between items-center">
                               <div className="space-y-1">
@@ -4718,9 +4805,16 @@ export default function App() {
                                 <p className="text-xs font-bold text-zinc-400 uppercase">Fare</p>
                                 <p className="text-xl font-bold text-emerald-600">₹{ride.fare}</p>
                                 {ride.vehicle_type && (
-                                  <p className="text-[10px] font-black text-indigo-600 uppercase bg-indigo-50 px-1.5 py-0.5 rounded mt-1">
-                                    {ride.vehicle_type}
-                                  </p>
+                                  <div className="flex flex-col items-end gap-1 mt-1">
+                                    <p className="text-[10px] font-black text-indigo-600 uppercase bg-indigo-50 px-1.5 py-0.5 rounded">
+                                      {ride.vehicle_type}
+                                    </p>
+                                    {(ride as any).passengers && (
+                                      <p className="text-[10px] font-bold text-zinc-500 flex items-center gap-1">
+                                        <Users className="w-2.5 h-2.5" /> {(ride as any).passengers} Pax
+                                      </p>
+                                    )}
+                                  </div>
                                 )}
                               </div>
                             </div>

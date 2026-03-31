@@ -1,16 +1,20 @@
 import { getRealDistance } from './geminiService';
 
 export const VEHICLE_RATES = {
-  Mini: { base: 50, perKm: 19, description: "Compact cars for city travel" },
-  Sedan: { base: 80, perKm: 20, description: "Comfortable sedans for business" },
-  SUV: { base: 120, perKm: 22, description: "Large vehicles for families" },
-  Luxury: { base: 250, perKm: 45, description: "Premium luxury experience" }
+  Mini: { base: 50, perKm: 19, description: "Compact cars for city travel", seats: 4 },
+  Sedan: { base: 80, perKm: 20, description: "Comfortable sedans for business", seats: 4 },
+  SUV: { base: 120, perKm: 22, description: "Large vehicles for families", seats: 7 },
+  Sumo: { base: 150, perKm: 24, description: "Reliable multi-utility vehicle", seats: 10 },
+  Tavera: { base: 150, perKm: 24, description: "Spacious MUV for groups", seats: 10 },
+  Tempo: { base: 300, perKm: 35, description: "Large traveler for big groups", seats: 16 },
+  Luxury: { base: 250, perKm: 45, description: "Premium luxury experience", seats: 4 }
 };
 
 export interface FareOption {
   type: string;
   fare: number;
   description: string;
+  seats: number;
   discount?: number;
 }
 
@@ -55,7 +59,8 @@ export async function calculateRealFare(
         type,
         fare: finalFare,
         discount,
-        description: rates.description
+        description: rates.description,
+        seats: (rates as any).seats
       };
     });
   };
