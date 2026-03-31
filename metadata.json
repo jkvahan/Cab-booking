@@ -1,5 +1,5 @@
 {
-  "name": "JK Vahan - Smart Cab Booking",
+  "name": "SkyRide - Smart Cab Booking",
   "description": "A professional cab booking platform with real-time tracking, driver management, and live chat support.",
   "requestFramePermissions": ["geolocation"]
 }

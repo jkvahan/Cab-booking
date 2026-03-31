@@ -41,7 +41,7 @@ async function startServer() {
           await twilioClient.messages.create({
             from: process.env.TWILIO_WHATSAPP_NUMBER,
             to: process.env.ADMIN_WHATSAPP_NUMBER,
-            body: `[JK Vahan] ${message}`,
+            body: `[SkyRide] ${message}`,
           });
         }
         // Send to User/Driver if phone provided
@@ -50,7 +50,7 @@ async function startServer() {
           await twilioClient.messages.create({
             from: process.env.TWILIO_WHATSAPP_NUMBER,
             to: formattedPhone,
-            body: `[JK Vahan] ${message}`,
+            body: `[SkyRide] ${message}`,
           });
         }
       }

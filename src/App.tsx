@@ -208,7 +208,7 @@ async function sendNotification(type: string, data: any) {
 const socket = io();
 
 socket.on("notification", ({ type, data }) => {
-  triggerPushNotification(`JK Vahan: ${type.replace(/_/g, ' ')}`, data.message);
+  triggerPushNotification(`SkyRide: ${type.replace(/_/g, ' ')}`, data.message);
 });
 
 type View = 'user' | 'admin' | 'driver';
@@ -290,7 +290,7 @@ const Navbar = ({ activeView, setView, onLogout, user }: { activeView: View, set
           whileHover={{ scale: 1.05 }}
           className="font-black text-2xl tracking-tighter gradient-text cursor-default"
         >
-          JK Vahan
+          SkyRide
         </motion.span>
       </div>
       <div className="flex items-center gap-4">
@@ -1649,7 +1649,7 @@ export default function App() {
           if (driverSnap.exists()) {
             const currentBalance = driverSnap.data().wallet_balance || 0;
             if (currentBalance < withdrawalData.amount) {
-              setToast({ message: 'Insufficient driver balance', type: 'error', persistent: true });
+              setToast({ message: 'Low Driver Balance!', type: 'error', persistent: true });
               return;
             }
             await updateDoc(driverRef, { wallet_balance: currentBalance - withdrawalData.amount });
@@ -1705,7 +1705,7 @@ export default function App() {
     }
 
     if (amount > driverWallet.balance) {
-      setToast({ message: `Insufficient balance! You only have ₹${driverWallet.balance}`, type: 'error', persistent: true });
+      setToast({ message: `Low Balance! You only have ₹${driverWallet.balance}`, type: 'error', persistent: true });
       return;
     }
 
@@ -2093,7 +2093,7 @@ export default function App() {
     const commission = (ride.fare || 0) * 0.10;
     if (driverWallet.balance < commission) {
       setToast({ 
-        message: `Insufficient balance! You need at least ₹${commission.toFixed(2)} (10% commission) in your wallet to accept this ride. Please recharge.`, 
+        message: `Low Balance! You need at least ₹${commission.toFixed(2)} in your wallet to accept this ride.`, 
         type: 'error',
         persistent: true
       });
@@ -2210,7 +2210,7 @@ export default function App() {
 
         // Send Notifications
         sendNotification('RIDE_COMPLETED', {
-          message: `Ride ${rideData?.tracking_id} completed. Total Fare: ₹${rideData?.fare}. Thank you for riding with JK Vahan!`,
+          message: `Ride ${rideData?.tracking_id} completed. Total Fare: ₹${rideData?.fare}. Thank you for riding with SkyRide!`,
           phone: rideData?.user_phone
         });
 
@@ -2342,7 +2342,7 @@ export default function App() {
       <div className="min-h-screen bg-zinc-50 flex items-center justify-center">
         <div className="text-center space-y-4">
           <div className="w-16 h-16 border-4 border-zinc-900 border-t-transparent rounded-full animate-spin mx-auto"></div>
-          <p className="text-zinc-500 font-medium animate-pulse">Initializing JK Vahan...</p>
+          <p className="text-zinc-500 font-medium animate-pulse">Initializing SkyRide...</p>
         </div>
       </div>
     );
@@ -2381,30 +2381,6 @@ export default function App() {
         <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-orange-200/30 rounded-full blur-[120px] animate-pulse" />
         <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-indigo-200/30 rounded-full blur-[120px] animate-pulse" style={{ animationDelay: '2s' }} />
       </div>
-
-      {/* Toast Notification */}
-      <AnimatePresence>
-        {toast && (
-          <motion.div
-            initial={{ opacity: 0, y: 50 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 50 }}
-            className={`fixed bottom-8 left-1/2 -translate-x-1/2 px-6 py-3 rounded-full shadow-2xl z-[100] font-bold text-white flex items-center gap-2 ${
-              toast.type === 'success' ? 'bg-emerald-600' : 'bg-rose-600'
-            }`}
-          >
-            {toast.type === 'success' ? <CheckCircle2 className="w-5 h-5" /> : <X className="w-5 h-5" />}
-            {toast.message}
-            <button 
-              onClick={() => setToast(null)} 
-              className={`ml-2 flex items-center gap-1 px-2 py-1 rounded-lg hover:bg-white/20 transition-colors ${toast.persistent ? 'bg-white/10' : 'opacity-50 hover:opacity-100'}`}
-            >
-              {toast.persistent && <span className="text-xs uppercase tracking-wider">Dismiss</span>}
-              <X className="w-4 h-4" />
-            </button>
-          </motion.div>
-        )}
-      </AnimatePresence>
 
       {user && <Navbar activeView={view} setView={changeView} onLogout={user ? handleLogout : undefined} user={user} />}
 
@@ -2446,7 +2422,7 @@ export default function App() {
                         <User className="text-white w-6 h-6" /> 
                       </div>
                       <span className="gradient-text truncate max-w-[200px] sm:max-w-none">
-                        {userAuthMode === 'login' ? 'Welcome Back' : 'Join JK Vahan'}
+                        {userAuthMode === 'login' ? 'Welcome Back' : 'Join SkyRide'}
                       </span>
                     </h2>
                   {error && (
@@ -5390,6 +5366,12 @@ export default function App() {
           >
             {toast.type === 'success' ? <CheckCircle2 className="w-5 h-5" /> : <AlertCircle className="w-5 h-5" />}
             <span className="font-bold text-sm tracking-tight">{toast.message}</span>
+            <button 
+              onClick={() => setToast(null)}
+              className="ml-2 p-1 hover:bg-white/20 rounded-full transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
           </motion.div>
         )}
       </AnimatePresence>
