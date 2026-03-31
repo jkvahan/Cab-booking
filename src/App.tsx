@@ -28,7 +28,9 @@ import {
   Star,
   MessageSquare,
   Trash2,
-  Edit2
+  Edit2,
+  PlusCircle,
+  Zap
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -47,7 +49,8 @@ import {
   getDocFromServer,
   limit,
   arrayUnion,
-  setDoc
+  setDoc,
+  runTransaction
 } from 'firebase/firestore';
 import { 
   signInWithPopup, 
@@ -245,7 +248,8 @@ interface Ride {
   complaint_status?: 'pending' | 'resolved' | 'forwarded';
   complaint_reply?: string;
   complaint_user_reply?: string;
-  complaint_driver_reply?: string;
+  complaint_driver_reply?: string; // Message from Admin to Driver
+  complaint_driver_response?: string; // Reply from Driver to Admin/User
   complaint_forwarded_to_driver?: boolean;
   complaint_forwarded_to_admin_id?: string;
   complaint_forwarded_to_admin_name?: string;
@@ -316,6 +320,8 @@ const Navbar = ({ activeView, setView, onLogout, user }: { activeView: View, set
     </div>
   </nav>
 );
+
+const VAPID_PUBLIC_KEY = 'BC2F3-qn7u8AYKdqDSxY9ZMWRVqBYsd9e3lGQFX9jqpAid1SrmFISUM4BHAeBL6HP7QIKRId70iOu7stL5XeTf8';
 
 export default function App() {
   // Handle Mobile Back Button
@@ -388,6 +394,13 @@ export default function App() {
   const [isAuthReady, setIsAuthReady] = useState(false);
 
   useEffect(() => {
+    // Register Service Worker for Push Notifications
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js')
+        .then(reg => console.log('SW registered:', reg))
+        .catch(err => console.error('SW registration failed:', err));
+    }
+
     // Test Firestore connection
     const testConnection = async () => {
       try {
@@ -544,6 +557,7 @@ export default function App() {
   const [selectedTransactions, setSelectedTransactions] = useState<string[]>([]);
   const [isTransactionsBulkDeleteEnabled, setIsTransactionsBulkDeleteEnabled] = useState(false);
   const [isForgotPasswordModalOpen, setIsForgotPasswordModalOpen] = useState(false);
+  const [isRechargeModalOpen, setIsRechargeModalOpen] = useState(false);
   const [forgotPasswordType, setForgotPasswordType] = useState<'user' | 'driver'>('user');
   const [forgotPasswordData, setForgotPasswordData] = useState({ phone: '', pin: '', newPassword: '' });
   const [editingNotification, setEditingNotification] = useState<Notification | null>(null);
@@ -583,7 +597,7 @@ export default function App() {
   const [isActionLoading, setIsActionLoading] = useState(false);
   const [toast, setToast] = useState<{ message: string, type: 'success' | 'error', persistent?: boolean } | null>(null);
   const [confirmModal, setConfirmModal] = useState<{ message: string, onConfirm: () => void } | null>(null);
-  const [isAudioUnlocked, setIsAudioUnlocked] = useState(false);
+  const [isAudioUnlocked, setIsAudioUnlocked] = useState(true);
   const [pickupCoords, setPickupCoords] = useState<{ lat: number, lng: number } | null>(null);
   const [dropoffCoords, setDropoffCoords] = useState<{ lat: number, lng: number } | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -592,6 +606,26 @@ export default function App() {
     // Preload notification sound
     audioRef.current = new Audio('https://assets.mixkit.co/active_storage/sfx/1359/1359-preview.mp3');
     audioRef.current.loop = true;
+
+    // Global click listener to ensure audio context is unlocked
+    const handleFirstInteraction = () => {
+      if (audioRef.current) {
+        audioRef.current.play().then(() => {
+          audioRef.current?.pause();
+          audioRef.current!.currentTime = 0;
+          window.removeEventListener('click', handleFirstInteraction);
+          window.removeEventListener('touchstart', handleFirstInteraction);
+        }).catch(e => console.log('Silent unlock failed:', e));
+      }
+    };
+
+    window.addEventListener('click', handleFirstInteraction);
+    window.addEventListener('touchstart', handleFirstInteraction);
+
+    return () => {
+      window.removeEventListener('click', handleFirstInteraction);
+      window.removeEventListener('touchstart', handleFirstInteraction);
+    };
   }, []);
 
   const stopRing = () => {
@@ -661,20 +695,6 @@ export default function App() {
   }, [user?.id, isAuthReady]);
 
   // WebSocket Connection
-  const unlockAudio = () => {
-    if (audioRef.current) {
-      audioRef.current.play().then(() => {
-        audioRef.current?.pause();
-        audioRef.current!.currentTime = 0;
-        setIsAudioUnlocked(true);
-        setError('');
-        setToast({ message: "Sound Alerts Enabled!", type: 'success' });
-      }).catch(e => {
-        console.log('Audio unlock failed:', e);
-        setError('Please click the button again to enable sound alerts.');
-      });
-    }
-  };
 
   // Real-time listeners
   useEffect(() => {
@@ -698,21 +718,21 @@ export default function App() {
       notifQuery = query(
         collection(db, 'notifications'),
         orderBy('created_at', 'desc'),
-        limit(20)
+        limit(200)
       );
     } else if (view === 'driver') {
       notifQuery = query(
         collection(db, 'notifications'),
         where('target', 'in', ['all_drivers', 'specific_driver']),
         orderBy('created_at', 'desc'),
-        limit(10)
+        limit(100)
       );
     } else {
       notifQuery = query(
         collection(db, 'notifications'),
         where('target', 'in', ['all_users', 'specific_user']),
         orderBy('created_at', 'desc'),
-        limit(10)
+        limit(100)
       );
     }
 
@@ -808,7 +828,7 @@ export default function App() {
         collection(db, 'transactions'),
         where('driver_id', '==', user.id),
         orderBy('created_at', 'desc'),
-        limit(50)
+        limit(500)
       );
       unsubscribeDriverTransactions = onSnapshot(txQuery, (snapshot) => {
         const txs = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id }));
@@ -832,7 +852,7 @@ export default function App() {
         setAdminVehicles(vehicles);
       }, (err) => handleFirestoreError(err, OperationType.LIST, 'vehicles'));
 
-      unsubscribeAllRides = onSnapshot(query(collection(db, 'rides'), orderBy('created_at', 'desc'), limit(100)), (snapshot) => {
+      unsubscribeAllRides = onSnapshot(query(collection(db, 'rides'), orderBy('created_at', 'desc'), limit(1000)), (snapshot) => {
         const rides = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Ride));
         setAdminRides(rides);
       }, (err) => handleFirestoreError(err, OperationType.LIST, 'rides'));
@@ -1803,6 +1823,41 @@ export default function App() {
     }
   };
 
+  const subscribeToPushNotifications = async () => {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+      console.warn('Push notifications not supported');
+      return;
+    }
+
+    try {
+      const registration = await navigator.serviceWorker.ready;
+      
+      // Request permission
+      const permission = await Notification.requestPermission();
+      if (permission !== 'granted') {
+        console.warn('Notification permission denied');
+        return;
+      }
+
+      // Subscribe
+      const subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: VAPID_PUBLIC_KEY
+      });
+
+      // Send to server
+      await fetch('/api/push/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(subscription)
+      });
+
+      console.log('Push subscription successful');
+    } catch (err) {
+      console.error('Error subscribing to push notifications:', err);
+    }
+  };
+
   const handleDriverLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -1834,6 +1889,9 @@ export default function App() {
           setTempDriverId(null);
           setDriverPin('');
           setToast({ message: 'Login successful!', type: 'success' });
+          
+          // Subscribe to push notifications
+          subscribeToPushNotifications();
         } else {
           setError('Invalid PIN');
         }
@@ -2022,56 +2080,145 @@ export default function App() {
     }
   };
 
+  const rechargeOptions = [
+    { amount: 210, cashback: 0 },
+    { amount: 349, cashback: 10 },
+    { amount: 435, cashback: 15 },
+    { amount: 578, cashback: 25 },
+    { amount: 621, cashback: 30 },
+    { amount: 745, cashback: 40 },
+    { amount: 832, cashback: 50 },
+    { amount: 951, cashback: 70 },
+    { amount: 1015, cashback: 100 },
+  ];
+
+  const handleRazorpayPayment = async (amount: number, description: string, onSuccess: (response: any) => void) => {
+    try {
+      const response = await fetch('/api/payment/create-order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ amount, receipt: `receipt_${Date.now()}` }),
+      });
+      
+      if (!response.ok) throw new Error('Failed to create order');
+      
+      const order = await response.json();
+
+      const options = {
+        key: 'rzp_live_RvMKn3g0J7TcI4',
+        amount: order.amount,
+        currency: order.currency,
+        name: 'SkyRide',
+        description: description,
+        order_id: order.id,
+        handler: onSuccess,
+        prefill: {
+          name: user?.name || user?.username,
+          email: user?.email || '',
+          contact: user?.phone || '',
+        },
+        theme: { color: '#18181b' },
+      };
+
+      const rzp = new (window as any).Razorpay(options);
+      rzp.open();
+    } catch (err) {
+      console.error('Payment Error:', err);
+      setToast({ message: 'Payment initialization failed. Please try again.', type: 'error' });
+    }
+  };
+
   const handleBookRide = async () => {
     if (!selectedOption || !user) return;
-    setIsBooking(true);
-    try {
-      const rideData = {
-        user_id: user.id,
-        user_name: user.name || user.username || 'User',
-        user_phone: user.phone,
-        pickup_location: bookingData.pickup,
-        dropoff_location: bookingData.dropoff,
-        distance: estimatedDistance,
-        fare: selectedOption.fare,
-        discount: selectedOption.discount || 0,
-        vehicle_type: selectedOption.type,
-        passengers: parseInt(bookingData.passengers),
-        trip_type: bookingData.tripType,
-        pickup_date: bookingData.pickupDate,
-        pickup_time: bookingData.pickupTime,
-        status: 'pending' as RideStatus,
-        tracking_id: `CB${Math.floor(10000 + Math.random() * 90000)}`,
-        created_at: new Date().toISOString()
-      };
-      const docRef = await addDoc(collection(db, 'rides'), rideData);
-      
-      // Send Notifications
-      sendNotification('NEW_BOOKING', {
-        message: `New ride booked by ${user.name || user.username || 'User'}. Tracking ID: ${rideData.tracking_id}. From: ${rideData.pickup_location} To: ${rideData.dropoff_location}. Fare: ₹${rideData.fare}`,
-        phone: user.phone
-      });
+    
+    const bookingAmount = selectedOption.fare;
+    const advanceAmount = Math.round(bookingAmount * 0.1);
+    
+    setToast({ message: `Please pay ₹${advanceAmount} (10% advance) to confirm booking`, type: 'success' });
+    
+    handleRazorpayPayment(advanceAmount, `Booking Advance for ${selectedOption.type}`, async (response) => {
+      setIsBooking(true);
+      try {
+        const rideData = {
+          user_id: user.id,
+          user_name: user.name || user.username || 'User',
+          user_phone: user.phone,
+          pickup_location: bookingData.pickup,
+          dropoff_location: bookingData.dropoff,
+          distance: estimatedDistance,
+          fare: selectedOption.fare,
+          discount: selectedOption.discount || 0,
+          vehicle_type: selectedOption.type,
+          passengers: parseInt(bookingData.passengers),
+          trip_type: bookingData.tripType,
+          pickup_date: bookingData.pickupDate,
+          pickup_time: bookingData.pickupTime,
+          status: 'pending' as RideStatus,
+          tracking_id: `CB${Math.floor(10000 + Math.random() * 90000)}`,
+          created_at: new Date().toISOString(),
+          advance_paid: advanceAmount,
+          payment_id: response.razorpay_payment_id
+        };
+        const docRef = await addDoc(collection(db, 'rides'), rideData);
+        
+        // Send Notifications
+        sendNotification('NEW_BOOKING', {
+          message: `New ride booked by ${user.name || user.username || 'User'}. Tracking ID: ${rideData.tracking_id}. From: ${rideData.pickup_location} To: ${rideData.dropoff_location}. Fare: ₹${rideData.fare}`,
+          phone: user.phone
+        });
 
-      setFareOptions([]);
-      setBookingData({ 
-        pickup: '', 
-        dropoff: '', 
-        tripType: 'single', 
-        manualDistance: '',
-        passengers: '1',
-        pickupDate: new Date().toISOString().split('T')[0],
-        pickupTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
-      });
-      setTrackedRide(null);
-      setTrackingId('');
-      setError('');
-      setToast({ message: `Ride booked successfully! Tracking ID: ${rideData.tracking_id}`, type: 'success' });
-    } catch (err) {
-      handleFirestoreError(err, OperationType.CREATE, 'rides');
-      setError('Booking failed. Please try again.');
-    } finally {
-      setIsBooking(false);
-    }
+        setFareOptions([]);
+        setBookingData({ 
+          pickup: '', 
+          dropoff: '', 
+          tripType: 'single', 
+          manualDistance: '',
+          passengers: '1',
+          pickupDate: new Date().toISOString().split('T')[0],
+          pickupTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+        });
+        setTrackedRide(null);
+        setTrackingId('');
+        setError('');
+        setToast({ message: `Ride booked successfully! Tracking ID: ${rideData.tracking_id}`, type: 'success' });
+      } catch (err) {
+        handleFirestoreError(err, OperationType.CREATE, 'rides');
+        setError('Booking failed. Please try again.');
+      } finally {
+        setIsBooking(false);
+      }
+    });
+  };
+
+  const handleRechargeWallet = async (option: typeof rechargeOptions[0]) => {
+    handleRazorpayPayment(option.amount, `Wallet Recharge - ₹${option.amount}`, async (response) => {
+      try {
+        const totalAdd = option.amount + option.cashback;
+        const walletRef = doc(db, 'wallets', user!.id);
+        
+        await runTransaction(db, async (transaction) => {
+          const walletDoc = await transaction.get(walletRef);
+          const currentBalance = walletDoc.exists() ? walletDoc.data().balance : 0;
+          
+          transaction.set(walletRef, { balance: currentBalance + totalAdd }, { merge: true });
+          
+          const txRef = doc(collection(db, 'wallets', user!.id, 'transactions'));
+          transaction.set(txRef, {
+            id: txRef.id,
+            amount: totalAdd,
+            type: 'credit',
+            description: `Wallet Recharge (₹${option.amount} + ₹${option.cashback} Cashback)`,
+            created_at: new Date().toISOString(),
+          });
+        });
+        
+        setToast({ message: `₹${totalAdd} added to wallet!`, type: 'success' });
+        setIsRechargeModalOpen(false);
+      } catch (err) {
+        console.error('Recharge Error:', err);
+        setToast({ message: 'Failed to update wallet balance', type: 'error' });
+      }
+    });
   };
 
   const handleTrackRide = async () => {
@@ -2948,6 +3095,12 @@ export default function App() {
                                   <div className="mt-2 p-2 bg-emerald-50 border border-emerald-100 rounded-lg">
                                     <p className="text-[10px] font-bold text-emerald-600 uppercase">Response from {ride.complaint_admin_name || 'Admin'}:</p>
                                     <p className="text-xs text-emerald-700 italic">{ride.complaint_user_reply}</p>
+                                  </div>
+                                )}
+                                {ride.complaint_driver_response && (
+                                  <div className="mt-2 p-2 bg-indigo-50 border border-indigo-100 rounded-lg">
+                                    <p className="text-[10px] font-bold text-indigo-600 uppercase">Response from Driver:</p>
+                                    <p className="text-xs text-indigo-700 italic">{ride.complaint_driver_response}</p>
                                   </div>
                                 )}
                                 {ride.complaint_reply && !ride.complaint_user_reply && (
@@ -3975,8 +4128,14 @@ export default function App() {
                                     )}
                                     {ride.complaint_driver_reply && (
                                       <div className="mt-1 pt-1 border-t border-rose-100">
-                                        <p className="text-[8px] font-bold text-indigo-600 uppercase">Driver Reply:</p>
+                                        <p className="text-[8px] font-bold text-indigo-600 uppercase">Admin to Driver:</p>
                                         <p className="text-[9px] text-indigo-700 italic">{ride.complaint_driver_reply}</p>
+                                      </div>
+                                    )}
+                                    {ride.complaint_driver_response && (
+                                      <div className="mt-1 pt-1 border-t border-rose-100">
+                                        <p className="text-[8px] font-bold text-emerald-600 uppercase">Driver Response:</p>
+                                        <p className="text-[9px] text-emerald-700 italic">{ride.complaint_driver_response}</p>
                                       </div>
                                     )}
                                     {ride.complaint_reply && !ride.complaint_user_reply && (
@@ -4668,17 +4827,15 @@ export default function App() {
                           <div className="absolute inset-0 shimmer opacity-0 group-hover:opacity-100 transition-opacity" />
                           <CreditCard className="w-5 h-5" /> Withdraw to Bank
                         </motion.button>
-                        {!isAudioUnlocked && (
-                          <motion.button 
-                            whileHover={{ scale: 1.05 }}
-                            whileTap={{ scale: 0.95 }}
-                            onClick={unlockAudio}
-                            className="bg-emerald-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-emerald-500 transition-all flex items-center gap-2 shadow-lg relative overflow-hidden group"
-                          >
-                            <div className="absolute inset-0 shimmer opacity-0 group-hover:opacity-100 transition-opacity" />
-                            <ShieldCheck className="w-5 h-5" /> Enable Sound Alerts
-                          </motion.button>
-                        )}
+                        <motion.button 
+                          whileHover={{ scale: 1.05 }}
+                          whileTap={{ scale: 0.95 }}
+                          onClick={() => setIsRechargeModalOpen(true)}
+                          className="bg-emerald-500 text-white px-6 py-3 rounded-xl font-bold hover:bg-emerald-600 transition-all flex items-center gap-2 shadow-lg"
+                        >
+                          <PlusCircle className="w-5 h-5" /> Recharge Wallet
+                        </motion.button>
+                        {/* Alert enable option removed as per user request */}
                       </div>
                     </div>
                     <Wallet className="absolute -right-8 -bottom-8 w-48 h-48 text-white/5" />
@@ -4726,6 +4883,48 @@ export default function App() {
                                 <div className="pt-2 border-t border-rose-100">
                                   <p className="text-[10px] font-bold text-indigo-600 uppercase">Admin Message for You:</p>
                                   <p className="text-xs text-indigo-700 italic">{ride.complaint_driver_reply}</p>
+                                </div>
+                              )}
+                              {ride.complaint_driver_response && (
+                                <div className="pt-2 border-t border-rose-100">
+                                  <p className="text-[10px] font-bold text-emerald-600 uppercase">Your Response:</p>
+                                  <p className="text-xs text-emerald-700 italic">{ride.complaint_driver_response}</p>
+                                </div>
+                              )}
+                              {!ride.complaint_driver_response && (
+                                <div className="pt-2 border-t border-rose-100 space-y-2">
+                                  <textarea
+                                    placeholder="Write your response to this complaint..."
+                                    className="w-full p-2 text-xs border border-rose-200 rounded-lg focus:ring-1 focus:ring-rose-500 outline-none"
+                                    rows={2}
+                                    id={`driver-response-${ride.id}`}
+                                  />
+                                  <button
+                                    onClick={async () => {
+                                      const responseInput = document.getElementById(`driver-response-${ride.id}`) as HTMLTextAreaElement;
+                                      const response = responseInput?.value;
+                                      if (!response?.trim()) {
+                                        setToast({ message: "Please enter a response", type: 'error' });
+                                        return;
+                                      }
+                                      setIsActionLoading(true);
+                                      try {
+                                        await updateDoc(doc(db, 'rides', ride.id), {
+                                          complaint_driver_response: response,
+                                          complaint_status: 'resolved' // Mark as resolved when driver responds? Or keep as forwarded?
+                                        });
+                                        setToast({ message: "Response sent successfully", type: 'success' });
+                                      } catch (err: any) {
+                                        handleFirestoreError(err, OperationType.UPDATE, `rides/${ride.id}`);
+                                      } finally {
+                                        setIsActionLoading(false);
+                                      }
+                                    }}
+                                    disabled={isActionLoading}
+                                    className="w-full bg-rose-600 text-white py-1.5 rounded-lg text-[10px] font-bold hover:bg-rose-700 transition-colors disabled:opacity-50"
+                                  >
+                                    {isActionLoading ? 'Sending...' : 'Send Response'}
+                                  </button>
                                 </div>
                               )}
                               {ride.complaint_reply && !ride.complaint_driver_reply && (
@@ -4907,13 +5106,22 @@ export default function App() {
                                     </button>
                                   </div>
                                 ) : (
-                                  <button
+                                  <motion.button
                                     onClick={() => preCheckAcceptRide(ride)}
                                     disabled={isActionLoading}
-                                    className="w-full bg-zinc-900 text-white py-3 rounded-xl font-bold hover:bg-zinc-800 transition-all disabled:opacity-50"
+                                    animate={{
+                                      scale: [1, 1.05, 1],
+                                      rotate: [0, -1, 1, -1, 1, 0],
+                                    }}
+                                    transition={{
+                                      duration: 0.5,
+                                      repeat: Infinity,
+                                      repeatDelay: 2
+                                    }}
+                                    className="w-full bg-zinc-900 text-white py-3 rounded-xl font-bold hover:bg-zinc-800 transition-all disabled:opacity-50 shadow-lg shadow-zinc-200"
                                   >
                                     Accept Ride
-                                  </button>
+                                  </motion.button>
                                 )}
                               </div>
                             )}
@@ -4997,6 +5205,48 @@ export default function App() {
                                     <p className="text-xs text-indigo-700 italic">{ride.complaint_driver_reply}</p>
                                   </div>
                                 )}
+                                {ride.complaint_driver_response && (
+                                  <div className="mt-2 p-2 bg-emerald-50 border border-emerald-100 rounded-lg">
+                                    <p className="text-[10px] font-bold text-emerald-600 uppercase">Your Response:</p>
+                                    <p className="text-xs text-emerald-700 italic">{ride.complaint_driver_response}</p>
+                                  </div>
+                                )}
+                                {!ride.complaint_driver_response && (
+                                  <div className="mt-2 space-y-2">
+                                    <textarea
+                                      placeholder="Write your response to this complaint..."
+                                      className="w-full p-2 text-xs border border-rose-200 rounded-lg focus:ring-1 focus:ring-rose-500 outline-none"
+                                      rows={2}
+                                      id={`driver-response-active-${ride.id}`}
+                                    />
+                                    <button
+                                      onClick={async () => {
+                                        const responseInput = document.getElementById(`driver-response-active-${ride.id}`) as HTMLTextAreaElement;
+                                        const response = responseInput?.value;
+                                        if (!response?.trim()) {
+                                          setToast({ message: "Please enter a response", type: 'error' });
+                                          return;
+                                        }
+                                        setIsActionLoading(true);
+                                        try {
+                                          await updateDoc(doc(db, 'rides', ride.id), {
+                                            complaint_driver_response: response,
+                                            complaint_status: 'resolved'
+                                          });
+                                          setToast({ message: "Response sent successfully", type: 'success' });
+                                        } catch (err: any) {
+                                          handleFirestoreError(err, OperationType.UPDATE, `rides/${ride.id}`);
+                                        } finally {
+                                          setIsActionLoading(false);
+                                        }
+                                      }}
+                                      disabled={isActionLoading}
+                                      className="w-full bg-rose-600 text-white py-1.5 rounded-lg text-[10px] font-bold hover:bg-rose-700 transition-colors disabled:opacity-50"
+                                    >
+                                      {isActionLoading ? 'Sending...' : 'Send Response'}
+                                    </button>
+                                  </div>
+                                )}
                                 <p className={`text-[8px] font-bold uppercase ${ride.complaint_status === 'resolved' ? 'text-emerald-600' : 'text-rose-500'}`}>
                                   Status: {ride.complaint_status || 'pending'}
                                 </p>
@@ -5043,6 +5293,68 @@ export default function App() {
               )}
             </AnimatePresence>
           </main>
+
+      {/* Recharge Modal */}
+      <AnimatePresence>
+        {isRechargeModalOpen && (
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white w-full max-w-lg rounded-[2.5rem] p-8 shadow-2xl space-y-6 relative overflow-hidden"
+            >
+              <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-50 rounded-full -mr-16 -mt-16" />
+              
+              <div className="flex justify-between items-center relative z-10">
+                <div>
+                  <h2 className="text-2xl font-black">Recharge Wallet</h2>
+                  <p className="text-zinc-500 text-sm">Select an amount to recharge</p>
+                </div>
+                <button onClick={() => setIsRechargeModalOpen(false)} className="p-2 hover:bg-zinc-100 rounded-full transition-colors">
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 relative z-10">
+                {rechargeOptions.map((option) => (
+                  <button
+                    key={option.amount}
+                    onClick={() => handleRechargeWallet(option)}
+                    className="p-4 bg-zinc-50 border border-zinc-100 rounded-2xl hover:border-emerald-500 hover:bg-emerald-50 transition-all text-center group relative overflow-hidden"
+                  >
+                    <div className="relative z-10">
+                      <p className="text-lg font-black text-zinc-900">₹{option.amount}</p>
+                      {option.cashback > 0 && (
+                        <p className="text-[10px] font-bold text-emerald-600 uppercase mt-1">
+                          +₹{option.cashback} Cashback
+                        </p>
+                      )}
+                    </div>
+                    {option.cashback >= 50 && (
+                      <div className="absolute -top-1 -right-1 bg-rose-500 text-white text-[8px] font-bold px-2 py-0.5 rounded-bl-lg uppercase">
+                        Best Offer
+                      </div>
+                    )}
+                  </button>
+                ))}
+              </div>
+
+              <div className="bg-zinc-50 p-4 rounded-2xl border border-zinc-100">
+                <div className="flex items-start gap-3">
+                  <div className="w-8 h-8 bg-emerald-100 rounded-full flex items-center justify-center flex-shrink-0">
+                    <Zap className="w-4 h-4 text-emerald-600" />
+                  </div>
+                  <div>
+                    <p className="text-xs font-bold text-zinc-900">Instant Credit</p>
+                    <p className="text-[10px] text-zinc-500">Amount will be added to your wallet immediately after successful payment.</p>
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* Review Modal */}
       <AnimatePresence>
