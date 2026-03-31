@@ -1675,6 +1675,27 @@ export default function App() {
       return;
     }
 
+    // Check for pending withdrawal requests
+    try {
+      const q = query(
+        collection(db, 'withdrawal_requests'),
+        where('driver_id', '==', user.id),
+        where('status', '==', 'pending'),
+        limit(1)
+      );
+      const snapshot = await getDocs(q);
+      if (!snapshot.empty) {
+        setToast({ 
+          message: 'You already have a pending withdrawal request. Please wait for it to be processed.', 
+          type: 'error', 
+          persistent: true 
+        });
+        return;
+      }
+    } catch (err) {
+      console.error("Error checking pending withdrawals:", err);
+    }
+
     const amountStr = prompt(`Enter amount to withdraw (Available: ₹${driverWallet.balance}):`);
     if (!amountStr) return;
     const amount = parseFloat(amountStr);
@@ -2052,6 +2073,36 @@ export default function App() {
     }
   };
 
+  const preCheckAcceptRide = async (ride: Ride) => {
+    // 1. Check if driver already has an active ride
+    const hasActiveRide = availableRides.some(r => 
+      r.driver_id === user.id && 
+      (r.status === 'accepted' || r.status === 'ongoing')
+    );
+
+    if (hasActiveRide) {
+      setToast({ 
+        message: "You already have an active ride! Please complete it before accepting another.", 
+        type: 'error',
+        persistent: true
+      });
+      return;
+    }
+
+    // 2. Check balance (10% commission)
+    const commission = (ride.fare || 0) * 0.10;
+    if (driverWallet.balance < commission) {
+      setToast({ 
+        message: `Insufficient balance! You need at least ₹${commission.toFixed(2)} (10% commission) in your wallet to accept this ride. Please recharge.`, 
+        type: 'error',
+        persistent: true
+      });
+      return;
+    }
+
+    setAcceptingRideId(ride.id);
+  };
+
   const handleAcceptRide = async (rideId: string) => {
     if (!etaInput) {
       setAcceptingRideId(rideId);
@@ -2065,25 +2116,6 @@ export default function App() {
       
       if (rideSnap.exists() && rideSnap.data().status === 'pending') {
         const rideData = rideSnap.data();
-        const commission = (rideData.fare || 0) * 0.10;
-
-        // Fetch latest driver balance
-        const driverRef = doc(db, 'drivers', user.id);
-        const driverSnap = await getDoc(driverRef);
-        const currentBalance = driverSnap.exists() ? (driverSnap.data().wallet_balance || 0) : 0;
-
-        if (currentBalance < commission) {
-          setToast({ 
-            message: `Insufficient balance! You need at least ₹${commission.toFixed(2)} (10% commission) in your wallet to accept this ride. Please recharge.`, 
-            type: 'error',
-            persistent: true
-          });
-          setIsActionLoading(false);
-          setAcceptingRideId(null);
-          setEtaInput('');
-          return;
-        }
-
         const startOtp = Math.floor(1000 + Math.random() * 9000).toString();
         const endOtp = Math.floor(1000 + Math.random() * 9000).toString();
         await updateDoc(rideRef, {
@@ -4806,7 +4838,7 @@ export default function App() {
                                   </div>
                                 ) : (
                                   <button
-                                    onClick={() => setAcceptingRideId(ride.id)}
+                                    onClick={() => preCheckAcceptRide(ride)}
                                     disabled={isActionLoading}
                                     className="w-full bg-zinc-900 text-white py-3 rounded-xl font-bold hover:bg-zinc-800 transition-all disabled:opacity-50"
                                   >
