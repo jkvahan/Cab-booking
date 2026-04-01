@@ -289,7 +289,7 @@ interface Notification {
 
 // --- Components ---
 
-const Navbar = ({ activeView, setView, onLogout, user }: { activeView: View, setView: (v: View) => void, onLogout?: () => void, user: any }) => (
+const Navbar = ({ activeView, setView, onLogout, user, onSubscribe }: { activeView: View, setView: (v: View) => void, onLogout?: () => void, user: any, onSubscribe?: () => void }) => (
   <nav className="fixed top-0 left-0 right-0 glass z-50 m-4 rounded-2xl">
     <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
       <div className="flex items-center gap-3">
@@ -301,6 +301,16 @@ const Navbar = ({ activeView, setView, onLogout, user }: { activeView: View, set
         </motion.span>
       </div>
       <div className="flex items-center gap-4">
+        {onSubscribe && (
+          <button 
+            onClick={onSubscribe}
+            className="p-2 hover:bg-zinc-100 rounded-xl transition-all group flex items-center gap-2"
+            title="Enable Notifications"
+          >
+            <Bell className="w-5 h-5 text-zinc-400 group-hover:text-zinc-900" />
+            <span className="hidden sm:inline text-xs font-bold text-zinc-500 group-hover:text-zinc-900">Enable Alerts</span>
+          </button>
+        )}
         {user && (
           <motion.div 
             initial={{ scale: 0 }}
@@ -407,7 +417,11 @@ export default function App() {
     // Register Service Worker for Push Notifications
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js')
-        .then(reg => console.log('SW registered:', reg))
+        .then(reg => {
+          console.log('SW registered:', reg);
+          // Try to subscribe on load
+          subscribeToPushNotifications();
+        })
         .catch(err => console.error('SW registration failed:', err));
     }
 
@@ -1546,6 +1560,13 @@ export default function App() {
       };
 
       await addDoc(collection(db, 'rides'), rideData);
+      
+      // Send Notifications
+      sendNotification('NEW_RIDE', {
+        message: `New manual ride added by Admin. Tracking ID: ${rideData.tracking_id}. From: ${rideData.pickup_location} To: ${rideData.dropoff_location}. Fare: ₹${rideData.fare}`,
+        phone: null
+      });
+
       setToast({ message: "Manual ride added successfully", type: 'success' });
       setIsManualRideModalOpen(false);
       setManualRideData({
@@ -1876,6 +1897,10 @@ export default function App() {
     }
   };
 
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>(
+    typeof Notification !== 'undefined' ? Notification.permission : 'default'
+  );
+
   const subscribeToPushNotifications = async () => {
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
       console.warn('Push notifications not supported');
@@ -1887,6 +1912,7 @@ export default function App() {
       
       // Request permission
       const permission = await Notification.requestPermission();
+      setNotificationPermission(permission);
       if (permission !== 'granted') {
         console.warn('Notification permission denied');
         return;
@@ -2680,7 +2706,13 @@ export default function App() {
         <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-indigo-200/30 rounded-full blur-[120px] animate-pulse" style={{ animationDelay: '2s' }} />
       </div>
 
-      {user && <Navbar activeView={view} setView={changeView} onLogout={user ? handleLogout : undefined} user={user} />}
+      <Navbar 
+        activeView={view} 
+        setView={changeView} 
+        onLogout={user ? handleLogout : undefined} 
+        user={user} 
+        onSubscribe={subscribeToPushNotifications}
+      />
 
       {/* Background Blobs */}
       <div className="fixed inset-0 -z-10 overflow-hidden pointer-events-none">
@@ -2730,6 +2762,24 @@ export default function App() {
                     </div>
                   )}
                   
+                  {notificationPermission !== 'granted' && (
+                    <div className="mb-6 p-4 bg-indigo-50 border border-indigo-100 rounded-2xl flex items-center gap-4 animate-in fade-in slide-in-from-top-4 duration-500">
+                      <div className="p-2 bg-indigo-600 rounded-xl shadow-lg shadow-indigo-200">
+                        <Bell className="w-5 h-5 text-white animate-bounce" />
+                      </div>
+                      <div className="flex-1">
+                        <p className="text-sm font-bold text-indigo-900">Enable Ride Alerts</p>
+                        <p className="text-xs text-indigo-600">Get notified about new rides instantly!</p>
+                      </div>
+                      <button 
+                        onClick={subscribeToPushNotifications}
+                        className="px-4 py-2 bg-indigo-600 text-white text-xs font-black rounded-xl hover:bg-indigo-700 transition-all shadow-md shadow-indigo-200 active:scale-95"
+                      >
+                        Enable
+                      </button>
+                    </div>
+                  )}
+
                   <form onSubmit={userAuthMode === 'login' ? handleUserLogin : handleUserRegister} className="space-y-4">
                         {userAuthMode === 'register' && (
                           <input
@@ -4879,6 +4929,24 @@ export default function App() {
                     </div>
                   )}
                   
+                  {notificationPermission !== 'granted' && (
+                    <div className="mb-6 p-4 bg-indigo-50 border border-indigo-100 rounded-2xl flex items-center gap-4 animate-in fade-in slide-in-from-top-4 duration-500">
+                      <div className="p-2 bg-indigo-600 rounded-xl shadow-lg shadow-indigo-200">
+                        <Bell className="w-5 h-5 text-white animate-bounce" />
+                      </div>
+                      <div className="flex-1">
+                        <p className="text-sm font-bold text-indigo-900">Enable Ride Alerts</p>
+                        <p className="text-xs text-indigo-600">Get notified about new rides instantly!</p>
+                      </div>
+                      <button 
+                        onClick={subscribeToPushNotifications}
+                        className="px-4 py-2 bg-indigo-600 text-white text-xs font-black rounded-xl hover:bg-indigo-700 transition-all shadow-md shadow-indigo-200 active:scale-95"
+                      >
+                        Enable
+                      </button>
+                    </div>
+                  )}
+
                   <form onSubmit={driverAuthMode === 'login' ? handleDriverLogin : handleDriverRegister} className="space-y-4">
                         {driverAuthMode === 'register' && (
                           <div className="space-y-4">

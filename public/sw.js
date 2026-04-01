@@ -3,8 +3,8 @@ self.addEventListener('push', (event) => {
   
   const options = {
     body: data.body,
-    icon: '/icon-192x192.png', // Placeholder icon
-    badge: '/badge-72x72.png', // Placeholder badge
+    icon: 'https://cdn-icons-png.flaticon.com/512/3063/3063822.png', // Taxi icon
+    badge: 'https://cdn-icons-png.flaticon.com/512/3063/3063822.png',
     vibrate: [200, 100, 200, 100, 200, 100, 400],
     data: {
       url: data.url || '/'

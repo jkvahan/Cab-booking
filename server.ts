@@ -23,21 +23,20 @@ if (!admin.apps.length) {
     projectId: firebaseConfig.projectId,
   });
 }
-const db = admin.firestore();
-if (firebaseConfig.firestoreDatabaseId) {
-  // If a specific database ID is provided in the config
-  // Note: Standard firebase-admin doesn't easily support named databases in initializeApp
-  // but we can try to use it if needed. However, usually it's the default one.
-}
+const db = admin.firestore(firebaseConfig.firestoreDatabaseId);
 
 const isProd = process.env.NODE_ENV === "production";
 
 // Configure web-push
-if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || 'BC2F3-qn7u8AYKdqDSxY9ZMWRVqBYsd9e3lGQFX9jqpAid1SrmFISUM4BHAeBL6HP7QIKRId70iOu7stL5XeTf8';
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || 'OHBS3fnZkhZpxivIspusKK79gq6f8D8OTeNvGZYkYdI';
+const VAPID_SUBJECT = process.env.VAPID_SUBJECT || 'mailto:digitalserviceindia84@gmail.com';
+
+if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
   webpush.setVapidDetails(
-    process.env.VAPID_SUBJECT || 'mailto:example@yourdomain.com',
-    process.env.VAPID_PUBLIC_KEY,
-    process.env.VAPID_PRIVATE_KEY
+    VAPID_SUBJECT,
+    VAPID_PUBLIC_KEY,
+    VAPID_PRIVATE_KEY
   );
 }
 
@@ -172,10 +171,11 @@ async function startServer() {
       }
 
       // 2. Send Push Notifications
-      if (type === 'NEW_RIDE' || type === 'RIDE_REQUESTED') {
+      const pushTypes = ['NEW_RIDE', 'RIDE_REQUESTED', 'NEW_BOOKING', 'RIDE_ACCEPTED', 'RIDE_STARTED', 'RIDE_COMPLETED', 'RIDE_CANCELLED', 'RIDE_DRIVER_CANCELLED'];
+      if (pushTypes.includes(type)) {
         const payload = JSON.stringify({
-          title: 'New Ride Alert! 🚖',
-          body: message || 'A new ride is available in your area.',
+          title: type.replace(/_/g, ' ').replace('NEW ', 'New '),
+          body: message || 'A ride update is available.',
           url: '/'
         });
 
