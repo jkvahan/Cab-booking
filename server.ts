@@ -3,12 +3,32 @@ import { createServer } from "http";
 import { Server as SocketServer } from "socket.io";
 import { createServer as createViteServer } from "vite";
 import path from "path";
+import fs from "fs";
 import twilio from "twilio";
 import dotenv from "dotenv";
 import webpush from "web-push";
 import Razorpay from "razorpay";
+import admin from "firebase-admin";
+
+// Load firebase config manually to avoid import attribute issues in ESM
+const firebaseConfig = JSON.parse(
+  fs.readFileSync(path.resolve("firebase-applet-config.json"), "utf-8")
+);
 
 dotenv.config();
+
+// Initialize Firebase Admin
+if (!admin.apps.length) {
+  admin.initializeApp({
+    projectId: firebaseConfig.projectId,
+  });
+}
+const db = admin.firestore();
+if (firebaseConfig.firestoreDatabaseId) {
+  // If a specific database ID is provided in the config
+  // Note: Standard firebase-admin doesn't easily support named databases in initializeApp
+  // but we can try to use it if needed. However, usually it's the default one.
+}
 
 const isProd = process.env.NODE_ENV === "production";
 
@@ -29,9 +49,6 @@ const razorpay = new Razorpay({
   key_id: RAZORPAY_KEY_ID,
   key_secret: RAZORPAY_KEY_SECRET,
 });
-
-// In-memory subscription storage (for demo purposes)
-let pushSubscriptions: any[] = [];
 
 async function startServer() {
   const app = express();
@@ -110,14 +127,17 @@ async function startServer() {
   });
 
   // Push Subscription Endpoint
-  app.post("/api/push/subscribe", (req, res) => {
+  app.post("/api/push/subscribe", async (req, res) => {
     const subscription = req.body;
-    // Check if already exists
-    const exists = pushSubscriptions.find(s => s.endpoint === subscription.endpoint);
-    if (!exists) {
-      pushSubscriptions.push(subscription);
+    try {
+      // Use endpoint as a unique ID to avoid duplicates
+      const subId = Buffer.from(subscription.endpoint).toString('base64').replace(/\//g, '_');
+      await db.collection('push_subscriptions').doc(subId).set(subscription);
+      res.status(201).json({ success: true });
+    } catch (error) {
+      console.error("Error saving push subscription:", error);
+      res.status(500).json({ success: false });
     }
-    res.status(201).json({ success: true });
   });
 
   // Notification Service
@@ -159,15 +179,17 @@ async function startServer() {
           url: '/'
         });
 
-        const pushPromises = pushSubscriptions.map(sub => 
-          webpush.sendNotification(sub, payload).catch(err => {
+        const subsSnapshot = await db.collection('push_subscriptions').get();
+        const pushPromises = subsSnapshot.docs.map(doc => {
+          const sub = doc.data();
+          return webpush.sendNotification(sub as any, payload).catch(async err => {
             console.error("Push failed for subscription:", sub.endpoint, err);
             if (err.statusCode === 410 || err.statusCode === 404) {
               // Remove expired subscription
-              pushSubscriptions = pushSubscriptions.filter(s => s.endpoint !== sub.endpoint);
+              await db.collection('push_subscriptions').doc(doc.id).delete();
             }
-          })
-        );
+          });
+        });
         await Promise.all(pushPromises);
       }
 

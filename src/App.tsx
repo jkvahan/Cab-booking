@@ -15,6 +15,7 @@ import {
   Settings,
   Users,
   CreditCard,
+  Filter,
   X,
   KeyRound,
   History as HistoryIcon,
@@ -392,7 +393,14 @@ export default function App() {
       default: return 'bg-zinc-100 text-zinc-700';
     }
   };
-  const [user, setUser] = useState<any>(null);
+  const [user, setUser] = useState<any>(() => {
+    const saved = localStorage.getItem('vahan_user');
+    try {
+      return saved ? JSON.parse(saved) : null;
+    } catch (e) {
+      return null;
+    }
+  });
   const [isAuthReady, setIsAuthReady] = useState(false);
 
   useEffect(() => {
@@ -462,14 +470,21 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  const [view, setView] = useState<View>('user');
+  const [view, setView] = useState<View>(() => {
+    const saved = localStorage.getItem('vahan_view');
+    return (saved as View) || 'user';
+  });
 
   useEffect(() => {
-    // No longer using localStorage for user/view to ensure fresh state on open
+    if (user) {
+      localStorage.setItem('vahan_user', JSON.stringify(user));
+    } else {
+      localStorage.removeItem('vahan_user');
+    }
   }, [user]);
 
   useEffect(() => {
-    // No longer using localStorage for user/view to ensure fresh state on open
+    localStorage.setItem('vahan_view', view);
   }, [view]);
 
   const [trackingId, setTrackingId] = useState('');
@@ -554,6 +569,7 @@ export default function App() {
   const [editingDriver, setEditingDriver] = useState<any | null>(null);
   const [isManualRideModalOpen, setIsManualRideModalOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const [searchCategory, setSearchCategory] = useState('all');
   const [selectedRides, setSelectedRides] = useState<string[]>([]);
   const [isRidesBulkDeleteEnabled, setIsRidesBulkDeleteEnabled] = useState(false);
   const [selectedTransactions, setSelectedTransactions] = useState<string[]>([]);
@@ -2616,28 +2632,43 @@ export default function App() {
   }
 
   const filteredRides = adminRides.filter(r => 
-    r.tracking_id.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (r as any).user_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (r as any).user_phone?.includes(searchTerm) ||
-    (r as any).driver_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    r.pickup_location.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    r.dropoff_location.toLowerCase().includes(searchTerm.toLowerCase())
+    (searchCategory === 'all' || searchCategory === 'rides') && (
+      r.tracking_id.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (r as any).user_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (r as any).user_phone?.includes(searchTerm) ||
+      (r as any).driver_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      r.pickup_location.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      r.dropoff_location.toLowerCase().includes(searchTerm.toLowerCase())
+    )
   );
 
   const filteredDrivers = adminDrivers.filter(d => 
-    d.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    d.phone.includes(searchTerm) ||
-    d.username?.toLowerCase().includes(searchTerm.toLowerCase())
+    (searchCategory === 'all' || searchCategory === 'drivers') && (
+      d.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      d.phone.includes(searchTerm) ||
+      d.username?.toLowerCase().includes(searchTerm.toLowerCase())
+    )
   );
 
   const filteredUsers = adminUsers.filter(u => 
-    u.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    u.phone.includes(searchTerm)
+    (searchCategory === 'all' || searchCategory === 'users') && (
+      u.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      u.phone.includes(searchTerm)
+    )
   );
 
   const filteredWithdrawals = adminWithdrawals.filter(w => 
-    w.driver_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    w.driver_phone.includes(searchTerm)
+    (searchCategory === 'all' || searchCategory === 'withdrawals') && (
+      w.driver_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      w.driver_phone.includes(searchTerm)
+    )
+  );
+
+  const filteredNotifications = adminNotifications.filter(n => 
+    (searchCategory === 'all' || searchCategory === 'notifications') && (
+      n.message.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      n.target.toLowerCase().includes(searchTerm.toLowerCase())
+    )
   );
 
   return (
@@ -3536,15 +3567,32 @@ export default function App() {
 
                         {/* Global Search Bar */}
                         <div className="bg-white p-4 rounded-3xl border border-zinc-200 shadow-sm sticky top-20 z-40">
-                          <div className="relative">
-                            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-zinc-400" />
-                            <input 
-                              type="text"
-                              placeholder="Search rides, drivers, users, locations..."
-                              className="w-full pl-12 pr-4 py-4 bg-zinc-50 border border-zinc-200 rounded-2xl text-sm focus:outline-none focus:ring-2 focus:ring-zinc-900 font-medium"
-                              value={searchTerm}
-                              onChange={e => setSearchTerm(e.target.value)}
-                            />
+                          <div className="flex flex-col sm:flex-row gap-3">
+                            <div className="relative min-w-[160px]">
+                              <Filter className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+                              <select 
+                                value={searchCategory}
+                                onChange={e => setSearchCategory(e.target.value)}
+                                className="w-full pl-10 pr-4 py-4 bg-zinc-50 border border-zinc-200 rounded-2xl text-xs font-black uppercase tracking-widest focus:outline-none focus:ring-2 focus:ring-zinc-900 appearance-none cursor-pointer"
+                              >
+                                <option value="all">All Data</option>
+                                <option value="rides">Rides</option>
+                                <option value="drivers">Drivers</option>
+                                <option value="users">Users</option>
+                                <option value="withdrawals">Withdrawals</option>
+                                <option value="notifications">Notifications</option>
+                              </select>
+                            </div>
+                            <div className="relative flex-1">
+                              <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-zinc-400" />
+                              <input 
+                                type="text"
+                                placeholder={`Search in ${searchCategory === 'all' ? 'everything' : searchCategory}...`}
+                                className="w-full pl-12 pr-4 py-4 bg-zinc-50 border border-zinc-200 rounded-2xl text-sm focus:outline-none focus:ring-2 focus:ring-zinc-900 font-medium"
+                                value={searchTerm}
+                                onChange={e => setSearchTerm(e.target.value)}
+                              />
+                            </div>
                           </div>
                         </div>
 
@@ -3849,10 +3897,10 @@ export default function App() {
                       <div className="mt-8 pt-8 border-t border-zinc-100">
                         <h4 className="text-sm font-black uppercase tracking-widest text-zinc-400 mb-4">Sent Notifications</h4>
                         <div className="space-y-3">
-                          {adminNotifications.length === 0 ? (
-                            <p className="text-center text-zinc-500 py-4 text-sm">No notifications sent yet.</p>
+                          {filteredNotifications.length === 0 ? (
+                            <p className="text-center text-zinc-500 py-4 text-sm">No notifications found.</p>
                           ) : (
-                            adminNotifications.map(notif => (
+                            filteredNotifications.map(notif => (
                               <div key={notif.id} className="p-4 bg-zinc-50 rounded-2xl border border-zinc-100 flex justify-between items-start gap-4">
                                 <div className="flex-1">
                                   <div className="flex items-center gap-2 mb-1">

@@ -154,6 +154,7 @@
     "rides": { "schema": "Ride", "description": "Ride bookings" },
     "transactions": { "schema": "Transaction", "description": "Wallet transactions" },
     "withdrawal_requests": { "schema": "WithdrawalRequest", "description": "Withdrawal requests" },
-    "notifications": { "schema": "Notification", "description": "Admin notifications" }
+    "notifications": { "schema": "Notification", "description": "Admin notifications" },
+    "push_subscriptions": { "schema": "object", "description": "Web push subscriptions" }
   }
 }
