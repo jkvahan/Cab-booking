@@ -22,9 +22,12 @@ if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
 }
 
 // Razorpay Initialization
+const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID || 'rzp_live_SY9A2V3V1yyLaS';
+const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || 'b9VQ4dNIPs2gXwcYRJzYAqQ0';
+
 const razorpay = new Razorpay({
-  key_id: process.env.RAZORPAY_KEY_ID || 'rzp_live_RvMKn3g0J7TcI4',
-  key_secret: process.env.RAZORPAY_KEY_SECRET || '',
+  key_id: RAZORPAY_KEY_ID,
+  key_secret: RAZORPAY_KEY_SECRET,
 });
 
 // In-memory subscription storage (for demo purposes)
@@ -45,20 +48,64 @@ async function startServer() {
   app.use(express.json({ limit: '50mb' }));
   app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
+  // Config Status Endpoint
+  app.get("/api/config/status", (req, res) => {
+    res.json({
+      razorpay_key_id: !!RAZORPAY_KEY_ID,
+      razorpay_key_secret: !!RAZORPAY_KEY_SECRET,
+      twilio_sid: !!process.env.TWILIO_ACCOUNT_SID,
+      twilio_token: !!process.env.TWILIO_AUTH_TOKEN,
+      vapid_keys: !!(process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY)
+    });
+  });
+
   // Razorpay Order Creation
   app.post('/api/payment/create-order', async (req, res) => {
+    const { amount, currency = 'INR', receipt } = req.body;
+
+    if (!RAZORPAY_KEY_SECRET) {
+      console.error('CRITICAL: RAZORPAY_KEY_SECRET is missing.');
+      return res.status(500).json({ 
+        error: 'Configuration Error',
+        details: 'Razorpay Secret Key is missing. Real payments require this key. Please set RAZORPAY_KEY_SECRET in Settings > Secrets.'
+      });
+    }
+
     try {
-      const { amount, currency = 'INR', receipt } = req.body;
+      
+      if (typeof amount !== 'number' || isNaN(amount) || amount <= 0) {
+        return res.status(400).json({ 
+          error: 'Invalid Amount',
+          details: 'The payment amount must be a positive number.'
+        });
+      }
+      
+      // Ensure amount is at least 1 INR (100 paise)
+      const finalAmount = Math.max(Math.round(amount * 100), 100);
+      
       const options = {
-        amount: Math.round(amount * 100), // amount in the smallest currency unit
+        amount: finalAmount,
         currency,
-        receipt,
+        receipt: receipt || `rcpt_${Date.now()}`,
       };
+      
+      console.log('Creating Razorpay Order:', options);
       const order = await razorpay.orders.create(options);
       res.json(order);
-    } catch (error) {
-      console.error('Razorpay Order Error:', error);
-      res.status(500).json({ error: 'Failed to create Razorpay order' });
+    } catch (error: any) {
+      console.error('Razorpay Order Error Details:', {
+        message: error.message,
+        description: error.description,
+        code: error.code,
+        metadata: error.metadata,
+        source: error.source,
+        step: error.step,
+        reason: error.reason
+      });
+      res.status(500).json({ 
+        error: 'Failed to create Razorpay order',
+        details: error.description || error.message || 'Unknown error'
+      });
     }
   });
 

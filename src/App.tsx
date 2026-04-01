@@ -256,6 +256,8 @@ interface Ride {
   complaint_user_phone?: string;
   complaint_driver_phone?: string;
   complaint_admin_name?: string;
+  advance_paid?: number;
+  payment_id?: string;
 }
 
 interface AdminUser {
@@ -369,9 +371,9 @@ export default function App() {
     localStorage.removeItem('vahan_user');
     signOut(auth);
   };
-  const getStatusLabel = (status: RideStatus) => {
+  const getStatusLabel = (status: RideStatus, advancePaid?: number) => {
     switch (status) {
-      case 'pending': return 'Searching...';
+      case 'pending': return advancePaid ? 'Confirmed' : 'Searching...';
       case 'accepted': return 'Accepted';
       case 'ongoing': return 'On the way';
       case 'completed': return 'Completed';
@@ -558,6 +560,24 @@ export default function App() {
   const [isTransactionsBulkDeleteEnabled, setIsTransactionsBulkDeleteEnabled] = useState(false);
   const [isForgotPasswordModalOpen, setIsForgotPasswordModalOpen] = useState(false);
   const [isRechargeModalOpen, setIsRechargeModalOpen] = useState(false);
+  const [useFreeRide, setUseFreeRide] = useState(false);
+  const [configStatus, setConfigStatus] = useState<any>(null);
+
+  const fetchConfigStatus = async () => {
+    try {
+      const response = await fetch('/api/config/status');
+      const data = await response.json();
+      setConfigStatus(data);
+    } catch (err) {
+      console.error('Failed to fetch config status:', err);
+    }
+  };
+
+  useEffect(() => {
+    if (user?.role === 'owner') {
+      fetchConfigStatus();
+    }
+  }, [user]);
   const [forgotPasswordType, setForgotPasswordType] = useState<'user' | 'driver'>('user');
   const [forgotPasswordData, setForgotPasswordData] = useState({ phone: '', pin: '', newPassword: '' });
   const [editingNotification, setEditingNotification] = useState<Notification | null>(null);
@@ -784,6 +804,21 @@ export default function App() {
           if (updated) setTrackedRide(updated);
         }
       }, (err) => handleFirestoreError(err, OperationType.LIST, 'rides'));
+
+      // User Data Listener (for wallet and free rides)
+      const userRef = doc(db, 'users', user.id);
+      const unsubscribeUser = onSnapshot(userRef, (docSnap) => {
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          setUser(prev => ({ ...prev, ...data }));
+        }
+      }, (err) => handleFirestoreError(err, OperationType.GET, `users/${user.id}`));
+      
+      // Cleanup
+      return () => {
+        unsubscribeRides();
+        unsubscribeUser();
+      };
     }
 
     if (view === 'driver') {
@@ -993,7 +1028,9 @@ export default function App() {
         password: userLoginData.password,
         created_at: new Date().toISOString(),
         role: 'user',
-        consecutive_cancellations: 0
+        consecutive_cancellations: 0,
+        wallet_balance: 0,
+        free_rides: 0
       };
 
       const docRef = await addDoc(collection(db, 'users'), data);
@@ -2081,18 +2118,23 @@ export default function App() {
   };
 
   const rechargeOptions = [
-    { amount: 210, cashback: 0 },
-    { amount: 349, cashback: 10 },
-    { amount: 435, cashback: 15 },
-    { amount: 578, cashback: 25 },
-    { amount: 621, cashback: 30 },
-    { amount: 745, cashback: 40 },
-    { amount: 832, cashback: 50 },
-    { amount: 951, cashback: 70 },
-    { amount: 1015, cashback: 100 },
+    { amount: 210, freeRides: 0 },
+    { amount: 349, freeRides: 1 },
+    { amount: 435, freeRides: 1 },
+    { amount: 578, freeRides: 2 },
+    { amount: 621, freeRides: 2 },
+    { amount: 745, freeRides: 3 },
+    { amount: 832, freeRides: 4 },
+    { amount: 951, freeRides: 5 },
+    { amount: 1015, freeRides: 6 },
   ];
 
   const handleRazorpayPayment = async (amount: number, description: string, onSuccess: (response: any) => void) => {
+    if (!(window as any).Razorpay) {
+      setToast({ message: 'Razorpay SDK not loaded. Please check your internet connection.', type: 'error' });
+      return;
+    }
+
     try {
       const response = await fetch('/api/payment/create-order', {
         method: 'POST',
@@ -2100,18 +2142,27 @@ export default function App() {
         body: JSON.stringify({ amount, receipt: `receipt_${Date.now()}` }),
       });
       
-      if (!response.ok) throw new Error('Failed to create order');
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.details || 'Failed to create order');
+      }
       
-      const order = await response.json();
+      const order = data;
 
       const options = {
-        key: 'rzp_live_RvMKn3g0J7TcI4',
+        key: (import.meta as any).env.VITE_RAZORPAY_KEY_ID || 'rzp_live_SY9A2V3V1yyLaS',
         amount: order.amount,
         currency: order.currency,
         name: 'SkyRide',
         description: description,
         order_id: order.id,
         handler: onSuccess,
+        modal: {
+          ondismiss: () => {
+            setIsBooking(false);
+            setIsActionLoading(false);
+          }
+        },
         prefill: {
           name: user?.name || user?.username,
           email: user?.email || '',
@@ -2122,9 +2173,11 @@ export default function App() {
 
       const rzp = new (window as any).Razorpay(options);
       rzp.open();
-    } catch (err) {
+    } catch (err: any) {
       console.error('Payment Error:', err);
-      setToast({ message: 'Payment initialization failed. Please try again.', type: 'error' });
+      setToast({ message: `Payment Error: ${err.message}`, type: 'error' });
+      setIsBooking(false);
+      setIsActionLoading(false);
     }
   };
 
@@ -2134,7 +2187,7 @@ export default function App() {
     const bookingAmount = selectedOption.fare;
     const advanceAmount = Math.round(bookingAmount * 0.1);
     
-    setToast({ message: `Please pay ₹${advanceAmount} (10% advance) to confirm booking`, type: 'success' });
+    setToast({ message: `Opening Razorpay for ₹${advanceAmount} advance payment...`, type: 'success' });
     
     handleRazorpayPayment(advanceAmount, `Booking Advance for ${selectedOption.type}`, async (response) => {
       setIsBooking(true);
@@ -2190,29 +2243,39 @@ export default function App() {
     });
   };
 
-  const handleRechargeWallet = async (option: typeof rechargeOptions[0]) => {
+  const handleRechargeWallet = async (option: any) => {
     handleRazorpayPayment(option.amount, `Wallet Recharge - ₹${option.amount}`, async (response) => {
       try {
-        const totalAdd = option.amount + option.cashback;
-        const walletRef = doc(db, 'wallets', user!.id);
+        const amountToAdd = option.amount;
+        const freeRidesToAdd = user!.role === 'driver' ? (option.freeRides || 0) : 0;
+        const collectionName = user!.role === 'driver' ? 'drivers' : 'users';
+        const userRef = doc(db, collectionName, user!.id);
         
         await runTransaction(db, async (transaction) => {
-          const walletDoc = await transaction.get(walletRef);
-          const currentBalance = walletDoc.exists() ? walletDoc.data().balance : 0;
+          const userDoc = await transaction.get(userRef);
+          const currentBalance = userDoc.exists() ? (userDoc.data()?.wallet_balance || 0) : 0;
+          const currentFreeRides = userDoc.exists() ? (userDoc.data()?.free_rides || 0) : 0;
           
-          transaction.set(walletRef, { balance: currentBalance + totalAdd }, { merge: true });
+          transaction.update(userRef, { 
+            wallet_balance: currentBalance + amountToAdd,
+            free_rides: currentFreeRides + freeRidesToAdd
+          });
           
-          const txRef = doc(collection(db, 'wallets', user!.id, 'transactions'));
+          const txRef = doc(collection(db, 'transactions'));
           transaction.set(txRef, {
             id: txRef.id,
-            amount: totalAdd,
+            user_id: user!.id,
+            amount: amountToAdd,
             type: 'credit',
-            description: `Wallet Recharge (₹${option.amount} + ₹${option.cashback} Cashback)`,
+            description: `Wallet Recharge (₹${option.amount}${freeRidesToAdd > 0 ? ` + ${freeRidesToAdd} Commission-Free Rides (Under 15km)` : ''})`,
             created_at: new Date().toISOString(),
           });
         });
         
-        setToast({ message: `₹${totalAdd} added to wallet!`, type: 'success' });
+        setToast({ 
+          message: `₹${amountToAdd} added to wallet!${freeRidesToAdd > 0 ? ` You also got ${freeRidesToAdd} Commission-Free Rides (Under 15km)!` : ''}`, 
+          type: 'success' 
+        });
         setIsRechargeModalOpen(false);
       } catch (err) {
         console.error('Recharge Error:', err);
@@ -2254,7 +2317,8 @@ export default function App() {
 
     // 2. Check balance (10% commission)
     const commission = (ride.fare || 0) * 0.10;
-    if (driverWallet.balance < commission) {
+    const isCommissionFree = (user.free_rides || 0) > 0 && (ride.distance || 0) <= 15;
+    if (!ride.advance_paid && !isCommissionFree && driverWallet.balance < commission) {
       setToast({ 
         message: `Low Balance! You need at least ₹${commission.toFixed(2)} in your wallet to accept this ride.`, 
         type: 'error',
@@ -2385,25 +2449,57 @@ export default function App() {
           phone: rideData?.user_phone
         });
 
-        // Update driver wallet (Deduct 10% fare as commission)
+        // Update driver wallet (Handle commission or free ride benefit)
         const driverId = rideData.driver_id;
         if (driverId) {
           const driverRef = doc(db, 'drivers', driverId);
           const driverSnap = await getDoc(driverRef);
           if (driverSnap.exists()) {
+            const driverData = driverSnap.data();
+            const freeRides = driverData.free_rides || 0;
+            const distance = rideData.distance || 0;
+            const advancePaid = rideData.advance_paid || 0;
             const fare = rideData.fare || 0;
             const commission = fare * 0.1;
-            const newBalance = (driverSnap.data().wallet_balance || 0) - commission;
-            await updateDoc(driverRef, { wallet_balance: newBalance });
-            
-            // Add transaction
-            await addDoc(collection(db, 'transactions'), {
-              driver_id: driverId,
-              amount: commission,
-              type: 'debit',
-              description: `Ride completed: ${rideData.tracking_id || rideId} (10% Commission Deducted)`,
-              created_at: new Date().toISOString()
-            });
+
+            if (freeRides > 0 && distance <= 15) {
+              // Use commission-free ride: Driver gets the advance amount (if any) credited to their wallet
+              await updateDoc(driverRef, { 
+                free_rides: freeRides - 1,
+                wallet_balance: (driverData.wallet_balance || 0) + advancePaid
+              });
+              
+              // Add transaction
+              await addDoc(collection(db, 'transactions'), {
+                driver_id: driverId,
+                amount: advancePaid,
+                type: 'credit',
+                description: `Ride completed: ${rideData.tracking_id || rideId} (Commission-Free Ride Used - Under 15km)${advancePaid > 0 ? ' - Advance Credited to Wallet' : ''}`,
+                created_at: new Date().toISOString()
+              });
+            } else if (!rideData.advance_paid) {
+              // Standard commission deduction (if not paid as advance)
+              const newBalance = (driverData.wallet_balance || 0) - commission;
+              await updateDoc(driverRef, { wallet_balance: newBalance });
+              
+              // Add transaction
+              await addDoc(collection(db, 'transactions'), {
+                driver_id: driverId,
+                amount: commission,
+                type: 'debit',
+                description: `Ride completed: ${rideData.tracking_id || rideId} (10% Commission Deducted)`,
+                created_at: new Date().toISOString()
+              });
+            } else {
+              // Commission already paid by user as advance, no deduction needed
+              await addDoc(collection(db, 'transactions'), {
+                driver_id: driverId,
+                amount: 0,
+                type: 'credit',
+                description: `Ride completed: ${rideData.tracking_id || rideId} (Commission already paid by user as advance)`,
+                created_at: new Date().toISOString()
+              });
+            }
           }
         }
 
@@ -2703,6 +2799,55 @@ export default function App() {
                     </motion.div>
                   ) : (
                     <>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
+                        {user.role === 'driver' && (
+                          <motion.div 
+                            initial={{ x: -20, opacity: 0 }}
+                            animate={{ x: 0, opacity: 1 }}
+                            className="glass p-6 rounded-[2rem] flex items-center justify-between group relative overflow-hidden"
+                          >
+                            <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-500/5 rounded-full -mr-12 -mt-12 blur-xl group-hover:scale-150 transition-transform duration-700" />
+                            <div className="flex items-center gap-4">
+                              <div className="p-3 bg-emerald-100 rounded-2xl">
+                                <Wallet className="w-6 h-6 text-emerald-600" />
+                              </div>
+                              <div>
+                                <p className="text-[10px] font-black uppercase tracking-widest text-zinc-400">Wallet Balance</p>
+                                <p className="text-2xl font-black">₹{user.wallet_balance || 0}</p>
+                              </div>
+                            </div>
+                            <button 
+                              onClick={() => setIsRechargeModalOpen(true)}
+                              className="p-2 bg-zinc-900 text-white rounded-xl hover:bg-zinc-800 transition-all shadow-lg"
+                            >
+                              <PlusCircle className="w-5 h-5" />
+                            </button>
+                          </motion.div>
+                        )}
+
+                        {user.role === 'driver' && (
+                          <motion.div 
+                            initial={{ x: 20, opacity: 0 }}
+                            animate={{ x: 0, opacity: 1 }}
+                            className="glass p-6 rounded-[2rem] flex items-center justify-between group relative overflow-hidden"
+                          >
+                            <div className="absolute top-0 right-0 w-24 h-24 bg-indigo-500/5 rounded-full -mr-12 -mt-12 blur-xl group-hover:scale-150 transition-transform duration-700" />
+                            <div className="flex items-center gap-4">
+                              <div className="p-3 bg-indigo-100 rounded-2xl">
+                                <Zap className="w-6 h-6 text-indigo-600" />
+                              </div>
+                              <div>
+                                <p className="text-[10px] font-black uppercase tracking-widest text-zinc-400">Free Rides (Under 15km)</p>
+                                <p className="text-2xl font-black">{user.free_rides || 0}</p>
+                              </div>
+                            </div>
+                            <div className="px-3 py-1 bg-indigo-50 text-indigo-600 rounded-full text-[10px] font-black uppercase tracking-widest">
+                              Active
+                            </div>
+                          </motion.div>
+                        )}
+                      </div>
+
                       <div className="text-center space-y-3 mb-10">
                     <motion.h1 
                       initial={{ y: 20, opacity: 0 }}
@@ -2946,17 +3091,23 @@ export default function App() {
                                 </div>
                                 <div className="text-right relative z-10">
                                   <p className="text-base font-black">₹{option.fare}</p>
-                                  {option.discount > 0 && (
-                                    <p className="text-[8px] font-black text-emerald-500 uppercase tracking-tighter">
-                                      Saved ₹{option.discount}
-                                    </p>
-                                  )}
+                                  <div className="flex flex-col items-end gap-0.5">
+                                    <span className="text-[7px] font-black text-emerald-500 uppercase tracking-tighter bg-emerald-50 px-1 rounded">
+                                      ₹{Math.round(option.fare * 0.1)} Advance
+                                    </span>
+                                    {option.discount > 0 && (
+                                      <p className="text-[8px] font-black text-emerald-500 uppercase tracking-tighter">
+                                        Saved ₹{option.discount}
+                                      </p>
+                                    )}
+                                  </div>
                                   <p className={`text-[7px] font-bold uppercase tracking-widest ${selectedOption?.type === option.type ? 'text-zinc-500' : 'text-zinc-400'}`}>Incl. taxes</p>
                                 </div>
                               </motion.button>
                             ))
                           )}
                         </div>
+                        {/* Removed passenger free ride section */}
                         <motion.button
                           whileHover={{ scale: 1.02 }}
                           whileTap={{ scale: 0.98 }}
@@ -2969,11 +3120,17 @@ export default function App() {
                             <div className="w-6 h-6 border-4 border-white/30 border-t-white rounded-full animate-spin" />
                           ) : (
                             <>
-                              <CheckCircle2 className="w-6 h-6" />
-                              <span className="text-lg uppercase tracking-widest">Confirm {selectedOption?.type}</span>
+                              <Zap className="w-6 h-6" />
+                              <span className="text-lg uppercase tracking-widest">
+                                {useFreeRide ? 'Confirm Free Ride' : selectedOption ? `Pay ₹${Math.round(selectedOption.fare * 0.1)} & Book` : `Confirm ${selectedOption?.type}`}
+                              </span>
                             </>
                           )}
                         </motion.button>
+                        <p className="text-[10px] text-zinc-500 text-center mt-3 font-bold uppercase tracking-widest flex items-center justify-center gap-1.5">
+                          <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
+                          10% Advance required to confirm booking
+                        </p>
                       </div>
                     )}
                   </motion.div>
@@ -3011,7 +3168,7 @@ export default function App() {
                                 )}
                               </div>
                               <div className={`px-3 py-1 rounded-full text-xs font-bold uppercase ${getStatusColor(ride.status)}`}>
-                                {getStatusLabel(ride.status)}
+                                {getStatusLabel(ride.status, ride.advance_paid)}
                               </div>
                             </div>
                             <div className="flex items-center justify-between">
@@ -3036,6 +3193,9 @@ export default function App() {
                                   <span className="text-[10px] font-bold text-emerald-600 uppercase flex items-center gap-1">
                                     <Clock className="w-3 h-3" /> {ride.pickup_date} {ride.pickup_time}
                                   </span>
+                                )}
+                                {ride.advance_paid && (
+                                  <span className="px-2 py-1 rounded text-[10px] font-bold uppercase bg-emerald-100 text-emerald-700">₹{ride.advance_paid} Advance Paid</span>
                                 )}
                               </div>
                               <div className="flex items-center gap-3">
@@ -3184,7 +3344,7 @@ export default function App() {
                       )}
                     </div>
                     <div className={`px-3 py-1 rounded-full text-xs font-bold uppercase ${getStatusColor(trackedRide.status)}`}>
-                      {getStatusLabel(trackedRide.status)}
+                      {getStatusLabel(trackedRide.status, trackedRide.advance_paid)}
                     </div>
                   </div>
 
@@ -3735,6 +3895,47 @@ export default function App() {
                   </div>
                   )}
 
+                  {(user.role === 'owner' && configStatus && !configStatus.razorpay_key_secret) && (
+                    <div className="bg-white rounded-2xl border border-rose-200 overflow-hidden mb-8">
+                      <div className="p-6 border-b border-rose-100 bg-rose-50 flex justify-between items-center">
+                        <div className="flex items-center gap-2">
+                          <h3 className="font-bold text-lg text-rose-900">System Configuration Check</h3>
+                          <span className="bg-rose-100 text-rose-700 text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider">
+                            Action Required
+                          </span>
+                        </div>
+                        <Settings className="w-5 h-5 text-rose-400" />
+                      </div>
+                      <div className="p-6 space-y-4">
+                        <div className="flex items-center justify-between p-4 bg-zinc-50 rounded-xl border border-zinc-100">
+                          <div>
+                            <p className="font-bold text-sm">Razorpay Key ID</p>
+                            <p className="text-xs text-zinc-500 font-mono">rzp_live_SY9A2V3V1yyLaS</p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <div className="w-2 h-2 rounded-full bg-emerald-500" />
+                            <span className="text-xs font-bold text-emerald-600 uppercase">Configured</span>
+                          </div>
+                        </div>
+                        <div className="flex items-center justify-between p-4 bg-zinc-50 rounded-xl border border-zinc-100">
+                          <div>
+                            <p className="font-bold text-sm">Razorpay Secret Key</p>
+                            <p className="text-xs text-zinc-500">Required for creating payment orders and verifying transactions.</p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <div className="w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
+                            <span className="text-xs font-bold text-rose-600 uppercase">Missing</span>
+                          </div>
+                        </div>
+                        <div className="p-4 bg-amber-50 rounded-xl border border-amber-100">
+                          <p className="text-xs text-amber-800 leading-relaxed">
+                            <span className="font-bold">How to fix:</span> Go to the <span className="font-bold">Settings</span> menu (gear icon) in the top right of the AI Studio interface, select <span className="font-bold">Secrets</span>, and add a new secret named <code className="bg-amber-100 px-1 rounded text-rose-700 font-mono">RAZORPAY_KEY_SECRET</code> with your actual Razorpay Secret Key.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   {(user.role === 'owner' || user.permissions?.withdrawals) && (
                     <div className="bg-white rounded-2xl border border-zinc-200 overflow-hidden">
                       <div className="p-6 border-b border-zinc-100 flex justify-between items-center">
@@ -4088,8 +4289,13 @@ export default function App() {
                               <td className="px-6 py-4 font-medium">{(ride as any).distance || '---'}</td>
                               <td className="px-6 py-4">
                                 <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase ${getStatusColor(ride.status)}`}>
-                                  {getStatusLabel(ride.status)}
+                                  {getStatusLabel(ride.status, ride.advance_paid)}
                                 </span>
+                                {ride.advance_paid && (
+                                  <div className="text-[8px] font-black text-emerald-600 uppercase mt-1">
+                                    ₹{ride.advance_paid} Adv. Paid
+                                  </div>
+                                )}
                               </td>
                               <td className="px-6 py-4 font-bold">
                                 <div>₹{ride.fare}</div>
@@ -5041,9 +5247,14 @@ export default function App() {
                             <div className="flex justify-between items-center pt-2 border-t border-zinc-50">
                               <div className="flex items-center gap-2">
                                 <span className={`px-2 py-1 rounded text-[10px] font-bold uppercase ${getStatusColor(ride.status)}`}>
-                                  {getStatusLabel(ride.status)}
+                                  {getStatusLabel(ride.status, ride.advance_paid)}
                                   {ride.status === 'accepted' && ride.driver_id !== user.id && ride.driver_name && ` (by ${ride.driver_name})`}
                                 </span>
+                                {ride.advance_paid && (
+                                  <span className="px-2 py-1 rounded text-[10px] font-bold uppercase bg-emerald-100 text-emerald-700 flex items-center gap-1">
+                                    <Zap className="w-2.5 h-2.5" /> ₹{ride.advance_paid} Advance Paid
+                                  </span>
+                                )}
                                 {ride.trip_type === 'round' ? (
                                   <span className="px-2 py-1 rounded text-[10px] font-bold uppercase bg-indigo-100 text-indigo-700">Round Trip</span>
                                 ) : (
@@ -5316,28 +5527,30 @@ export default function App() {
                 </button>
               </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 relative z-10">
-                {rechargeOptions.map((option) => (
-                  <button
-                    key={option.amount}
-                    onClick={() => handleRechargeWallet(option)}
-                    className="p-4 bg-zinc-50 border border-zinc-100 rounded-2xl hover:border-emerald-500 hover:bg-emerald-50 transition-all text-center group relative overflow-hidden"
-                  >
-                    <div className="relative z-10">
-                      <p className="text-lg font-black text-zinc-900">₹{option.amount}</p>
-                      {option.cashback > 0 && (
-                        <p className="text-[10px] font-bold text-emerald-600 uppercase mt-1">
-                          +₹{option.cashback} Cashback
-                        </p>
-                      )}
-                    </div>
-                    {option.cashback >= 50 && (
-                      <div className="absolute -top-1 -right-1 bg-rose-500 text-white text-[8px] font-bold px-2 py-0.5 rounded-bl-lg uppercase">
-                        Best Offer
+              <div className="max-h-[60vh] overflow-y-auto pr-2 relative z-10 scrollbar-hide">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                  {rechargeOptions.map((option) => (
+                    <button
+                      key={option.amount}
+                      onClick={() => handleRechargeWallet(option)}
+                      className="p-4 bg-zinc-50 border border-zinc-100 rounded-2xl hover:border-emerald-500 hover:bg-emerald-50 transition-all text-center group relative overflow-hidden"
+                    >
+                      <div className="relative z-10">
+                        <p className="text-lg font-black text-zinc-900">₹{option.amount}</p>
+                        {user?.role === 'driver' && option.freeRides > 0 && (
+                          <p className="text-[10px] font-bold text-emerald-600 uppercase mt-1">
+                            + {option.freeRides} Commission-Free Ride{option.freeRides > 1 ? 's' : ''} (Under 15km)
+                          </p>
+                        )}
                       </div>
-                    )}
-                  </button>
-                ))}
+                      {option.freeRides >= 3 && (
+                        <div className="absolute -top-1 -right-1 bg-rose-500 text-white text-[8px] font-bold px-2 py-0.5 rounded-bl-lg uppercase">
+                          Best Offer
+                        </div>
+                      )}
+                    </button>
+                  ))}
+                </div>
               </div>
 
               <div className="bg-zinc-50 p-4 rounded-2xl border border-zinc-100">
