@@ -42,8 +42,8 @@ if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
 }
 
 // Razorpay Initialization
-const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID || 'rzp_live_SYhQAJjpxJPo6G';
-const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || '5XZfzRKvpwfDgysFXEECR4q7';
+const RAZORPAY_KEY_ID = (process.env.RAZORPAY_KEY_ID || 'rzp_live_SYhQAJjpxJPo6G').trim();
+const RAZORPAY_KEY_SECRET = (process.env.RAZORPAY_KEY_SECRET || '5XZfzRKvpwfDgysFXEECR4q7').trim();
 
 const razorpay = new Razorpay({
   key_id: RAZORPAY_KEY_ID,
@@ -68,7 +68,7 @@ async function startServer() {
   // Config Status Endpoint
   app.get("/api/config/status", (req, res) => {
     res.json({
-      razorpay_key_id: !!RAZORPAY_KEY_ID,
+      razorpay_key_id: RAZORPAY_KEY_ID,
       razorpay_key_secret: !!RAZORPAY_KEY_SECRET,
       twilio_sid: !!process.env.TWILIO_ACCOUNT_SID,
       twilio_token: !!process.env.TWILIO_AUTH_TOKEN,

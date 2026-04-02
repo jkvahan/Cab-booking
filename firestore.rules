@@ -126,7 +126,7 @@ service cloud.firestore {
 
     match /transactions/{transactionId} {
       allow read: if true;
-      allow create: if true;
+      allow write: if true;
     }
 
     match /withdrawal_requests/{requestId} {

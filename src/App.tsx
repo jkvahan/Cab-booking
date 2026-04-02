@@ -606,10 +606,8 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (user?.role === 'owner') {
-      fetchConfigStatus();
-    }
-  }, [user]);
+    fetchConfigStatus();
+  }, []);
   const [forgotPasswordType, setForgotPasswordType] = useState<'user' | 'driver'>('user');
   const [forgotPasswordData, setForgotPasswordData] = useState({ phone: '', pin: '', newPassword: '' });
   const [editingNotification, setEditingNotification] = useState<Notification | null>(null);
@@ -903,7 +901,11 @@ export default function App() {
       }, (err) => handleFirestoreError(err, OperationType.LIST, 'transactions'));
     }
 
+    let cleanupInterval: any;
     if (view === 'admin') {
+      cleanupDatabase();
+      cleanupInterval = setInterval(cleanupDatabase, 60 * 60 * 1000); // Every hour
+      
       unsubscribeWithdrawals = onSnapshot(collection(db, 'withdrawal_requests'), (snapshot) => {
         const requests = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as any));
         setAdminWithdrawals(requests);
@@ -939,6 +941,7 @@ export default function App() {
     }
 
     return () => {
+      if (cleanupInterval) clearInterval(cleanupInterval);
       unsubscribeRides?.();
       unsubscribeAvailable?.();
       unsubscribeWithdrawals?.();
@@ -1026,6 +1029,12 @@ export default function App() {
       const snapshot = await getDocs(q);
       if (!snapshot.empty) {
         const userData = { ...snapshot.docs[0].data(), id: snapshot.docs[0].id, role: 'user' };
+        
+        // Update last active
+        await updateDoc(doc(db, 'users', userData.id), {
+          last_active: new Date().toISOString()
+        });
+        
         setUser(userData);
         localStorage.setItem('vahan_user', JSON.stringify(userData));
         setToast({ message: 'Login successful!', type: 'success' });
@@ -1065,6 +1074,7 @@ export default function App() {
         phone: userLoginData.phone,
         password: userLoginData.password,
         created_at: new Date().toISOString(),
+        last_active: new Date().toISOString(),
         role: 'user',
         consecutive_cancellations: 0,
         wallet_balance: 0,
@@ -1701,6 +1711,61 @@ export default function App() {
     }
   };
 
+  const cleanupDatabase = async () => {
+    if (!user) return;
+    if (user.role !== 'owner' && !user.permissions?.notifications) return;
+    
+    try {
+      const now = Date.now();
+      const twentyFourHoursAgo = new Date(now - 24 * 60 * 60 * 1000).toISOString();
+      const thirtyDaysAgo = new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString();
+      const twelveHoursAgo = new Date(now - 12 * 60 * 60 * 1000).toISOString();
+
+      // 1. Cleanup Notifications (12h)
+      const notifQuery = query(collection(db, 'notifications'), where('created_at', '<', twelveHoursAgo));
+      const notifSnap = await getDocs(notifQuery);
+      if (notifSnap.size > 0) {
+        await Promise.all(notifSnap.docs.map(d => deleteDoc(d.ref)));
+        console.log(`Cleaned up ${notifSnap.size} old notifications.`);
+      }
+
+      // 2. Cleanup Transactions (24h)
+      const txQuery = query(collection(db, 'transactions'), where('created_at', '<', twentyFourHoursAgo));
+      const txSnap = await getDocs(txQuery);
+      if (txSnap.size > 0) {
+        await Promise.all(txSnap.docs.map(d => deleteDoc(d.ref)));
+        console.log(`Cleaned up ${txSnap.size} old transactions.`);
+      }
+
+      // 3. Cleanup Withdrawal Requests (24h)
+      const withdrawQuery = query(collection(db, 'withdrawal_requests'), where('created_at', '<', twentyFourHoursAgo));
+      const withdrawSnap = await getDocs(withdrawQuery);
+      if (withdrawSnap.size > 0) {
+        await Promise.all(withdrawSnap.docs.map(d => deleteDoc(d.ref)));
+        console.log(`Cleaned up ${withdrawSnap.size} old withdrawal requests.`);
+      }
+
+      // 4. Cleanup Completed Rides (24h)
+      const rideQuery = query(collection(db, 'rides'), where('status', '==', 'completed'), where('created_at', '<', twentyFourHoursAgo));
+      const rideSnap = await getDocs(rideQuery);
+      if (rideSnap.size > 0) {
+        await Promise.all(rideSnap.docs.map(d => deleteDoc(d.ref)));
+        console.log(`Cleaned up ${rideSnap.size} old completed rides.`);
+      }
+
+      // 5. Cleanup Inactive Users (30 days)
+      const userQuery = query(collection(db, 'users'), where('last_active', '<', thirtyDaysAgo));
+      const userSnap = await getDocs(userQuery);
+      if (userSnap.size > 0) {
+        await Promise.all(userSnap.docs.map(d => deleteDoc(d.ref)));
+        console.log(`Cleaned up ${userSnap.size} inactive users.`);
+      }
+
+    } catch (err) {
+      console.error('Failed to cleanup database:', err);
+    }
+  };
+
   const handleUpdateNotification = async () => {
     if (!editingNotification) return;
     setIsActionLoading(true);
@@ -2022,7 +2087,7 @@ export default function App() {
         vehicle_number: loginData.vehicle_number,
         vehicle_seats: parseInt(loginData.vehicle_seats),
         wallet_balance: 0,
-        status: 'pending',
+        status: 'under verification',
         created_at: new Date().toISOString(),
         role: 'driver'
       };
@@ -2209,7 +2274,7 @@ export default function App() {
       const order = data;
 
       const options = {
-        key: (import.meta as any).env.VITE_RAZORPAY_KEY_ID || 'rzp_live_SYhQAJjpxJPo6G',
+        key: configStatus?.razorpay_key_id || (import.meta as any).env.VITE_RAZORPAY_KEY_ID || 'rzp_live_SYhQAJjpxJPo6G',
         amount: order.amount,
         currency: order.currency,
         name: 'SkyRide',
@@ -2229,6 +2294,10 @@ export default function App() {
         },
         theme: { color: '#18181b' },
       };
+
+      if (!(window as any).Razorpay) {
+        throw new Error('Razorpay SDK not loaded. Please check your internet connection.');
+      }
 
       const rzp = new (window as any).Razorpay(options);
       rzp.open();
@@ -2315,9 +2384,13 @@ export default function App() {
           const currentBalance = userDoc.exists() ? (userDoc.data()?.wallet_balance || 0) : 0;
           const currentFreeRides = userDoc.exists() ? (userDoc.data()?.free_rides || 0) : 0;
           
+          const expiryDate = new Date();
+          expiryDate.setDate(expiryDate.getDate() + 2);
+          
           transaction.update(userRef, { 
             wallet_balance: currentBalance + amountToAdd,
-            free_rides: currentFreeRides + freeRidesToAdd
+            free_rides: currentFreeRides + freeRidesToAdd,
+            free_rides_expiry: freeRidesToAdd > 0 ? expiryDate.toISOString() : (userDoc.data()?.free_rides_expiry || null)
           });
           
           const txRef = doc(collection(db, 'transactions'));
@@ -2376,13 +2449,16 @@ export default function App() {
 
     // 2. Check balance (10% commission)
     const commission = (ride.fare || 0) * 0.10;
-    const isCommissionFree = (user.free_rides || 0) > 0 && (ride.distance || 0) <= 15;
-    if (!ride.advance_paid && !isCommissionFree && driverWallet.balance < commission) {
+    const isOfferValid = (user.free_rides || 0) > 0 && (!user.free_rides_expiry || new Date(user.free_rides_expiry) > new Date());
+    const isCommissionFree = isOfferValid && (ride.distance || 0) <= 15;
+    
+    if (!isCommissionFree && driverWallet.balance < commission) {
       setToast({ 
         message: `Low Balance! You need at least ₹${commission.toFixed(2)} in your wallet to accept this ride.`, 
         type: 'error',
         persistent: true
       });
+      setIsRechargeModalOpen(true);
       return;
     }
 
@@ -2403,6 +2479,18 @@ export default function App() {
       if (rideSnap.exists() && rideSnap.data().status === 'pending') {
         const rideData = rideSnap.data();
         
+        // Final balance check before acceptance
+        const commission = (rideData.fare || 0) * 0.10;
+        const isOfferValid = (user.free_rides || 0) > 0 && (!user.free_rides_expiry || new Date(user.free_rides_expiry) > new Date());
+        const isCommissionFree = isOfferValid && (rideData.distance || 0) <= 15;
+        
+        if (!isCommissionFree && driverWallet.balance < commission) {
+          setError(`Low Balance! You need at least ₹${commission.toFixed(2)} in your wallet to accept this ride.`);
+          setIsRechargeModalOpen(true);
+          setIsActionLoading(false);
+          return;
+        }
+
         // Check vehicle capacity
         if (user.vehicle_seats && rideData.passengers > user.vehicle_seats) {
           setError(`Your vehicle (${user.vehicle_seats} seats) cannot accommodate ${rideData.passengers} passengers.`);
@@ -2508,7 +2596,7 @@ export default function App() {
           phone: rideData?.user_phone
         });
 
-        // Update driver wallet (Handle commission or free ride benefit)
+        // Update driver wallet (10% Commission Deduction or Free Ride)
         const driverId = rideData.driver_id;
         if (driverId) {
           const driverRef = doc(db, 'drivers', driverId);
@@ -2521,7 +2609,8 @@ export default function App() {
             const fare = rideData.fare || 0;
             const commission = fare * 0.1;
 
-            if (freeRides > 0 && distance <= 15) {
+            const isOfferValid = freeRides > 0 && (!driverData.free_rides_expiry || new Date(driverData.free_rides_expiry) > new Date());
+            if (isOfferValid && distance <= 15) {
               // Use commission-free ride: Driver gets the advance amount (if any) credited to their wallet
               await updateDoc(driverRef, { 
                 free_rides: freeRides - 1,
@@ -2536,28 +2625,33 @@ export default function App() {
                 description: `Ride completed: ${rideData.tracking_id || rideId} (Commission-Free Ride Used - Under 15km)${advancePaid > 0 ? ' - Advance Credited to Wallet' : ''}`,
                 created_at: new Date().toISOString()
               });
-            } else if (!rideData.advance_paid) {
-              // Standard commission deduction (if not paid as advance)
-              const newBalance = (driverData.wallet_balance || 0) - commission;
-              await updateDoc(driverRef, { wallet_balance: newBalance });
-              
-              // Add transaction
-              await addDoc(collection(db, 'transactions'), {
-                driver_id: driverId,
-                amount: commission,
-                type: 'debit',
-                description: `Ride completed: ${rideData.tracking_id || rideId} (10% Commission Deducted)`,
-                created_at: new Date().toISOString()
-              });
             } else {
-              // Commission already paid by user as advance, no deduction needed
-              await addDoc(collection(db, 'transactions'), {
-                driver_id: driverId,
-                amount: 0,
-                type: 'credit',
-                description: `Ride completed: ${rideData.tracking_id || rideId} (Commission already paid by user as advance)`,
-                created_at: new Date().toISOString()
+              // Standard commission deduction and credit advance
+              const newBalance = (driverData.wallet_balance || 0) - commission + advancePaid;
+              await updateDoc(driverRef, { 
+                wallet_balance: newBalance 
               });
+              
+              // Add transactions
+              if (commission > 0) {
+                await addDoc(collection(db, 'transactions'), {
+                  driver_id: driverId,
+                  amount: commission,
+                  type: 'debit',
+                  description: `Ride completed: ${rideData.tracking_id || rideId} (10% Commission Deducted)`,
+                  created_at: new Date().toISOString()
+                });
+              }
+
+              if (advancePaid > 0) {
+                await addDoc(collection(db, 'transactions'), {
+                  driver_id: driverId,
+                  amount: advancePaid,
+                  type: 'credit',
+                  description: `Ride completed: ${rideData.tracking_id || rideId} (Advance Payment Credited to Wallet)`,
+                  created_at: new Date().toISOString()
+                });
+              }
             }
           }
         }
@@ -2644,7 +2738,7 @@ export default function App() {
     });
   };
 
-  const setDriverStatus = async (driverId: string, newStatus: string) => {
+  const setDriverStatus = async (driverId: string, newStatus: 'active' | 'inactive' | 'under verification' | 'documents received' | 'rejected' | 'documents not received') => {
     try {
       await updateDoc(doc(db, 'drivers', driverId), { status: newStatus });
       setToast({ message: `Driver status updated to ${newStatus}`, type: 'success' });
@@ -4237,24 +4331,35 @@ export default function App() {
                                 </div>
                               </div>
                               <div className="flex flex-col gap-2">
-                                {driver.status === 'pending' && (
-                                  <button 
-                                    onClick={() => setDriverStatus(driver.id, 'under verification')}
-                                    className="px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 shadow-sm transition-all"
+                                <select
+                                  value={driver.status}
+                                  onChange={(e) => setDriverStatus(driver.id, e.target.value as any)}
+                                  className="px-3 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-xs font-bold focus:ring-1 focus:ring-zinc-900 outline-none"
+                                >
+                                  <option value="under verification">Under Verification</option>
+                                  <option value="documents received">Documents Received</option>
+                                  <option value="documents not received">Documents Not Received</option>
+                                  <option value="rejected">Rejected</option>
+                                  <option value="active">Active (Approved)</option>
+                                  <option value="inactive">Inactive</option>
+                                </select>
+                                
+                                {driver.status !== 'active' && (
+                                  <button
+                                    onClick={() => setDriverStatus(driver.id, 'active')}
+                                    className="px-4 py-2 bg-zinc-900 text-white rounded-lg text-xs font-bold hover:bg-zinc-800 shadow-md transition-all"
                                   >
-                                    Under Verification
+                                    Approve & Activate
                                   </button>
                                 )}
-                                <button
-                                  onClick={() => toggleDriverStatus(driver.id, driver.status)}
-                                  className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${
-                                    driver.status === 'active' 
-                                    ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200' 
-                                    : 'bg-zinc-900 text-white hover:bg-zinc-800 shadow-md'
-                                  }`}
-                                >
-                                  {driver.status === 'active' ? 'Deactivate' : 'Activate'}
-                                </button>
+                                {driver.status === 'active' && (
+                                  <button
+                                    onClick={() => setDriverStatus(driver.id, 'inactive')}
+                                    className="px-4 py-2 bg-rose-100 text-rose-700 rounded-lg text-xs font-bold hover:bg-rose-200 transition-all"
+                                  >
+                                    Deactivate
+                                  </button>
+                                )}
                               </div>
                             </div>
                           </div>
@@ -5086,21 +5191,58 @@ export default function App() {
                           className="max-w-md mx-auto bg-white p-10 rounded-[2.5rem] border border-zinc-200 text-center space-y-6 shadow-xl"
                         >
                           <div className="w-24 h-24 bg-amber-50 rounded-full flex items-center justify-center mx-auto">
-                            <Clock className="w-12 h-12 text-amber-600 animate-pulse" />
+                            {user.status === 'rejected' ? (
+                              <X className="w-12 h-12 text-rose-600" />
+                            ) : (
+                              <Clock className="w-12 h-12 text-amber-600 animate-pulse" />
+                            )}
                           </div>
                           <div className="space-y-2">
-                            <h2 className="text-2xl font-black">Verification Pending</h2>
-                            <p className="text-zinc-500 text-sm">
-                              Your profile is currently under review by our team. 
-                              We will notify you once your account is activated.
+                            <h2 className="text-2xl font-black">
+                              {user.status === 'rejected' ? 'Profile Rejected' : 
+                               user.status === 'documents not received' ? 'Documents Required' :
+                               'Verification Pending'}
+                            </h2>
+                            <p className="text-zinc-500 text-sm leading-relaxed">
+                              {user.status === 'under verification' ? (
+                                <>
+                                  Profile under verification. Please send your vehicle and personal documents on WhatsApp: <span className="font-bold text-zinc-900">9906361392</span> for verification.
+                                </>
+                              ) : user.status === 'documents received' ? (
+                                "Documents received! Our team is currently reviewing them. We will notify you once your account is activated."
+                              ) : user.status === 'documents not received' ? (
+                                <>
+                                  We haven't received your documents yet. Please send them on WhatsApp: <span className="font-bold text-zinc-900">9906361392</span> to proceed.
+                                </>
+                              ) : user.status === 'rejected' ? (
+                                "Your profile has been rejected. Please contact support for more information."
+                              ) : (
+                                "Your profile is currently under review by our team. We will notify you once your account is activated."
+                              )}
                             </p>
                           </div>
                           <div className="p-4 bg-zinc-50 rounded-2xl border border-zinc-100">
                             <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1">Current Status</p>
-                            <span className="px-3 py-1 bg-amber-100 text-amber-700 rounded-full text-xs font-bold uppercase tracking-wider">
+                            <span className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider ${
+                              user.status === 'rejected' ? 'bg-rose-100 text-rose-700' :
+                              user.status === 'documents received' ? 'bg-emerald-100 text-emerald-700' :
+                              'bg-amber-100 text-amber-700'
+                            }`}>
                               {user.status || 'Pending'}
                             </span>
                           </div>
+                          
+                          {user.status === 'documents not received' && (
+                            <motion.div 
+                              initial={{ scale: 0.9, opacity: 0 }}
+                              animate={{ scale: 1, opacity: 1 }}
+                              className="p-4 bg-rose-50 border border-rose-100 rounded-2xl text-rose-700 text-sm font-bold flex items-center gap-3"
+                            >
+                              <AlertCircle className="w-5 h-5 flex-shrink-0" />
+                              <p>Action Required: Send documents to 9906361392</p>
+                            </motion.div>
+                          )}
+
                           <button 
                             onClick={handleLogout}
                             className="w-full py-3 text-zinc-500 font-bold hover:text-zinc-900 transition-colors"
@@ -5118,8 +5260,18 @@ export default function App() {
                       <div className="absolute top-0 right-0 w-64 h-64 bg-gradient-to-br from-emerald-500/20 to-transparent rounded-full -mr-32 -mt-32 blur-3xl" />
                       <div className="relative z-10">
                         <p className="text-zinc-400 font-bold uppercase tracking-widest text-xs mb-2">Total Earnings</p>
-                        <h2 className="text-6xl font-black mb-8">₹{driverWallet.balance}</h2>
-                      <div className="flex flex-wrap gap-3">
+                        <h2 className="text-6xl font-black mb-4">₹{driverWallet.balance}</h2>
+                        
+                        {(user.free_rides || 0) > 0 && (
+                          <div className="mb-8 flex items-center gap-2 bg-emerald-500/20 w-fit px-4 py-2 rounded-full border border-emerald-500/30">
+                            <Zap className="w-4 h-4 text-emerald-400" />
+                            <span className="text-xs font-bold">
+                              {user.free_rides} Free Rides Left 
+                            </span>
+                          </div>
+                        )}
+                        
+                        <div className="flex flex-wrap gap-3">
                         <motion.button 
                           whileHover={{ scale: 1.05 }}
                           whileTap={{ scale: 0.95 }}
@@ -5626,9 +5778,11 @@ export default function App() {
                       <div className="relative z-10">
                         <p className="text-lg font-black text-zinc-900">₹{option.amount}</p>
                         {user?.role === 'driver' && option.freeRides > 0 && (
-                          <p className="text-[10px] font-bold text-emerald-600 uppercase mt-1">
-                            + {option.freeRides} Commission-Free Ride{option.freeRides > 1 ? 's' : ''} (Under 15km)
-                          </p>
+                          <div className="mt-1">
+                            <p className="text-[10px] font-bold text-emerald-600 uppercase">
+                              + {option.freeRides} Free Ride{option.freeRides > 1 ? 's' : ''} (Under 15km)
+                            </p>
+                          </div>
                         )}
                       </div>
                       {option.freeRides >= 3 && (
