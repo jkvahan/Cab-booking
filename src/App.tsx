@@ -167,7 +167,7 @@ import MapComponent from './components/Map';
 import { io } from "socket.io-client";
 
 
-async function triggerPushNotification(title: string, body: string) {
+async function triggerPushNotification(title: string, body: string, playAlarm: boolean = false) {
   if (!("Notification" in window)) return;
   
   const showNotification = () => {
@@ -176,9 +176,11 @@ async function triggerPushNotification(title: string, body: string) {
       icon: '/favicon.ico'
     });
     
-    // Play alarm sound
-    const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
-    audio.play().catch(e => console.error('Audio play failed:', e));
+    // Play alarm sound only if requested (for drivers)
+    if (playAlarm) {
+      const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
+      audio.play().catch(e => console.error('Audio play failed:', e));
+    }
     
     notification.onclick = () => {
       window.focus();
@@ -210,10 +212,6 @@ async function sendNotification(type: string, data: any) {
 }
 
 const socket = io();
-
-socket.on("notification", ({ type, data }) => {
-  triggerPushNotification(`SkyRide: ${type.replace(/_/g, ' ')}`, data.message);
-});
 
 type View = 'user' | 'admin' | 'driver';
 type RideStatus = 'pending' | 'accepted' | 'ongoing' | 'completed' | 'cancelled';
@@ -289,7 +287,7 @@ interface Notification {
 
 // --- Components ---
 
-const Navbar = ({ activeView, setView, onLogout, user, onSubscribe }: { activeView: View, setView: (v: View) => void, onLogout?: () => void, user: any, onSubscribe?: () => void }) => (
+const Navbar = ({ activeView, setView, onLogout, user }: { activeView: View, setView: (v: View) => void, onLogout?: () => void, user: any }) => (
   <nav className="fixed top-0 left-0 right-0 glass z-50 m-4 rounded-2xl">
     <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
       <div className="flex items-center gap-3">
@@ -301,16 +299,6 @@ const Navbar = ({ activeView, setView, onLogout, user, onSubscribe }: { activeVi
         </motion.span>
       </div>
       <div className="flex items-center gap-4">
-        {onSubscribe && (
-          <button 
-            onClick={onSubscribe}
-            className="p-2 hover:bg-zinc-100 rounded-xl transition-all group flex items-center gap-2"
-            title="Enable Notifications"
-          >
-            <Bell className="w-5 h-5 text-zinc-400 group-hover:text-zinc-900" />
-            <span className="hidden sm:inline text-xs font-bold text-zinc-500 group-hover:text-zinc-900">Enable Alerts</span>
-          </button>
-        )}
         {user && (
           <motion.div 
             initial={{ scale: 0 }}
@@ -483,6 +471,20 @@ export default function App() {
     });
     return () => unsubscribe();
   }, []);
+
+  useEffect(() => {
+    // Socket notification listener
+    const handleNotification = ({ type, data }: { type: string, data: any }) => {
+      // Alarm only for drivers
+      const isDriver = user?.role === 'driver';
+      triggerPushNotification(`SkyRide: ${type.replace(/_/g, ' ')}`, data.message, isDriver);
+    };
+
+    socket.on("notification", handleNotification);
+    return () => {
+      socket.off("notification", handleNotification);
+    };
+  }, [user]);
 
   const [view, setView] = useState<View>(() => {
     const saved = localStorage.getItem('vahan_view');
@@ -997,6 +999,9 @@ export default function App() {
         }
       }
       setToast({ message: 'Login successful!', type: 'success' });
+      
+      // Auto-subscribe to notifications
+      subscribeToPushNotifications();
     } catch (err: any) {
       console.error("Google Login Error:", err);
       if (err.code === 'auth/operation-not-allowed') {
@@ -1024,6 +1029,9 @@ export default function App() {
         setUser(userData);
         localStorage.setItem('vahan_user', JSON.stringify(userData));
         setToast({ message: 'Login successful!', type: 'success' });
+        
+        // Auto-subscribe to notifications
+        subscribeToPushNotifications();
       } else {
         setError('Invalid phone number or password');
       }
@@ -1068,6 +1076,9 @@ export default function App() {
       setUser(userData);
       localStorage.setItem('vahan_user', JSON.stringify(userData));
       setToast({ message: 'Registration successful!', type: 'success' });
+      
+      // Auto-subscribe to notifications
+      subscribeToPushNotifications();
     } catch (err: any) {
       console.error("User Registration Error:", err);
       setError(err.message || 'Registration failed');
@@ -1888,6 +1899,9 @@ export default function App() {
           setTempAdminId(null);
           setAdminPin('');
           setError('');
+          
+          // Auto-subscribe to notifications
+          subscribeToPushNotifications();
         } else {
           setError('Invalid PIN');
         }
@@ -2018,6 +2032,9 @@ export default function App() {
       setUser(driverData);
       localStorage.setItem('vahan_user', JSON.stringify(driverData));
       setToast({ message: 'Registration successful!', type: 'success' });
+      
+      // Auto-subscribe to notifications
+      subscribeToPushNotifications();
     } catch (err: any) {
       console.error("Driver Registration Error:", err);
       setError(err.message || 'Registration failed');
@@ -2192,7 +2209,7 @@ export default function App() {
       const order = data;
 
       const options = {
-        key: (import.meta as any).env.VITE_RAZORPAY_KEY_ID || 'rzp_live_SY9A2V3V1yyLaS',
+        key: (import.meta as any).env.VITE_RAZORPAY_KEY_ID || 'rzp_live_SYhQAJjpxJPo6G',
         amount: order.amount,
         currency: order.currency,
         name: 'SkyRide',
@@ -2711,7 +2728,6 @@ export default function App() {
         setView={changeView} 
         onLogout={user ? handleLogout : undefined} 
         user={user} 
-        onSubscribe={subscribeToPushNotifications}
       />
 
       {/* Background Blobs */}
@@ -2762,24 +2778,6 @@ export default function App() {
                     </div>
                   )}
                   
-                  {notificationPermission !== 'granted' && (
-                    <div className="mb-6 p-4 bg-indigo-50 border border-indigo-100 rounded-2xl flex items-center gap-4 animate-in fade-in slide-in-from-top-4 duration-500">
-                      <div className="p-2 bg-indigo-600 rounded-xl shadow-lg shadow-indigo-200">
-                        <Bell className="w-5 h-5 text-white animate-bounce" />
-                      </div>
-                      <div className="flex-1">
-                        <p className="text-sm font-bold text-indigo-900">Enable Ride Alerts</p>
-                        <p className="text-xs text-indigo-600">Get notified about new rides instantly!</p>
-                      </div>
-                      <button 
-                        onClick={subscribeToPushNotifications}
-                        className="px-4 py-2 bg-indigo-600 text-white text-xs font-black rounded-xl hover:bg-indigo-700 transition-all shadow-md shadow-indigo-200 active:scale-95"
-                      >
-                        Enable
-                      </button>
-                    </div>
-                  )}
-
                   <form onSubmit={userAuthMode === 'login' ? handleUserLogin : handleUserRegister} className="space-y-4">
                         {userAuthMode === 'register' && (
                           <input
@@ -4008,7 +4006,7 @@ export default function App() {
                         <div className="flex items-center justify-between p-4 bg-zinc-50 rounded-xl border border-zinc-100">
                           <div>
                             <p className="font-bold text-sm">Razorpay Key ID</p>
-                            <p className="text-xs text-zinc-500 font-mono">rzp_live_SY9A2V3V1yyLaS</p>
+                            <p className="text-xs text-zinc-500 font-mono">rzp_live_SYhQAJjpxJPo6G</p>
                           </div>
                           <div className="flex items-center gap-2">
                             <div className="w-2 h-2 rounded-full bg-emerald-500" />
@@ -4929,24 +4927,6 @@ export default function App() {
                     </div>
                   )}
                   
-                  {notificationPermission !== 'granted' && (
-                    <div className="mb-6 p-4 bg-indigo-50 border border-indigo-100 rounded-2xl flex items-center gap-4 animate-in fade-in slide-in-from-top-4 duration-500">
-                      <div className="p-2 bg-indigo-600 rounded-xl shadow-lg shadow-indigo-200">
-                        <Bell className="w-5 h-5 text-white animate-bounce" />
-                      </div>
-                      <div className="flex-1">
-                        <p className="text-sm font-bold text-indigo-900">Enable Ride Alerts</p>
-                        <p className="text-xs text-indigo-600">Get notified about new rides instantly!</p>
-                      </div>
-                      <button 
-                        onClick={subscribeToPushNotifications}
-                        className="px-4 py-2 bg-indigo-600 text-white text-xs font-black rounded-xl hover:bg-indigo-700 transition-all shadow-md shadow-indigo-200 active:scale-95"
-                      >
-                        Enable
-                      </button>
-                    </div>
-                  )}
-
                   <form onSubmit={driverAuthMode === 'login' ? handleDriverLogin : handleDriverRegister} className="space-y-4">
                         {driverAuthMode === 'register' && (
                           <div className="space-y-4">
@@ -5293,14 +5273,6 @@ export default function App() {
                       <h3 className="font-bold text-xl flex items-center gap-2">
                         <Clock className="w-5 h-5" /> Available Rides
                       </h3>
-                      {isAudioUnlocked && (
-                        <button 
-                          onClick={stopRing}
-                          className="flex items-center gap-2 px-3 py-1.5 bg-rose-50 text-rose-600 rounded-lg text-xs font-bold border border-rose-100 hover:bg-rose-100 transition-colors"
-                        >
-                          <BellRing className="w-3.5 h-3.5" /> Stop Alert
-                        </button>
-                      )}
                     </div>
                     {availableRides.filter(ride => !user.vehicle_seats || (ride as any).passengers <= user.vehicle_seats).length === 0 ? (
                       <div className="bg-white p-12 rounded-2xl border border-zinc-200 text-center space-y-2">

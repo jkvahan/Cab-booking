@@ -8,7 +8,8 @@ import twilio from "twilio";
 import dotenv from "dotenv";
 import webpush from "web-push";
 import Razorpay from "razorpay";
-import admin from "firebase-admin";
+import { initializeApp, getApps } from "firebase-admin/app";
+import { getFirestore } from "firebase-admin/firestore";
 
 // Load firebase config manually to avoid import attribute issues in ESM
 const firebaseConfig = JSON.parse(
@@ -18,12 +19,12 @@ const firebaseConfig = JSON.parse(
 dotenv.config();
 
 // Initialize Firebase Admin
-if (!admin.apps.length) {
-  admin.initializeApp({
+if (!getApps().length) {
+  initializeApp({
     projectId: firebaseConfig.projectId,
   });
 }
-const db = admin.firestore(firebaseConfig.firestoreDatabaseId);
+const db = getFirestore(firebaseConfig.firestoreDatabaseId);
 
 const isProd = process.env.NODE_ENV === "production";
 
@@ -41,8 +42,8 @@ if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
 }
 
 // Razorpay Initialization
-const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID || 'rzp_live_SY9A2V3V1yyLaS';
-const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || 'b9VQ4dNIPs2gXwcYRJzYAqQ0';
+const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID || 'rzp_live_SYhQAJjpxJPo6G';
+const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || '5XZfzRKvpwfDgysFXEECR4q7';
 
 const razorpay = new Razorpay({
   key_id: RAZORPAY_KEY_ID,
