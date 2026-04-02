@@ -5426,15 +5426,15 @@ export default function App() {
                         <Clock className="w-5 h-5" /> Available Rides
                       </h3>
                     </div>
-                    {availableRides.filter(ride => !user.vehicle_seats || (ride as any).passengers <= user.vehicle_seats).length === 0 ? (
+                    {availableRides.filter(ride => ride.status === 'pending').length === 0 ? (
                       <div className="bg-white p-12 rounded-2xl border border-zinc-200 text-center space-y-2">
-                        <p className="text-zinc-500">No suitable rides available right now.</p>
-                        <p className="text-sm text-zinc-400">Rides matching your vehicle capacity will appear here.</p>
+                        <p className="text-zinc-500">No available rides right now.</p>
+                        <p className="text-sm text-zinc-400">New ride requests will appear here in real-time.</p>
                       </div>
                     ) : (
                       <div className="grid grid-cols-1 gap-4">
                         {availableRides
-                          .filter(ride => !user.vehicle_seats || (ride as any).passengers <= user.vehicle_seats)
+                          .filter(ride => ride.status === 'pending')
                           .map(ride => (
                           <div key={ride.id} className="bg-white p-6 rounded-2xl border border-zinc-200 shadow-sm space-y-4">
                             <div className="flex justify-between items-center">
