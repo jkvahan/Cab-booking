@@ -19,24 +19,12 @@ const firebaseConfig = JSON.parse(
 dotenv.config();
 
 // Initialize Firebase Admin
-const firebaseApp = !getApps().length
-  ? initializeApp({
-      projectId: firebaseConfig.projectId,
-    })
-  : getApps()[0];
-
-const db = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId);
-
-// Test Firestore connection at startup
-(async () => {
-  try {
-    console.log("Testing Firestore connection...");
-    await db.collection('push_subscriptions').limit(1).get();
-    console.log("Firestore connection successful.");
-  } catch (error) {
-    console.error("Firestore startup connection test failed:", error);
-  }
-})();
+if (!getApps().length) {
+  initializeApp({
+    projectId: firebaseConfig.projectId,
+  });
+}
+const db = getFirestore(firebaseConfig.firestoreDatabaseId);
 
 const isProd = process.env.NODE_ENV === "production";
 

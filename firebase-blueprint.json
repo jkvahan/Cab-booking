@@ -62,7 +62,7 @@
         "driver_id": { "type": "string" },
         "model": { "type": "string" },
         "plate_number": { "type": "string" },
-        "type": { "type": "string", "enum": ["Mini", "Sedan", "SUV", "Traveller"] }
+        "type": { "type": "string", "enum": ["Mini", "Sedan", "SUV"] }
       },
       "required": ["driver_id", "model", "plate_number", "type"]
     },
@@ -144,19 +144,6 @@
         "read_by": { "type": "array", "items": { "type": "string" } }
       },
       "required": ["message", "target", "created_at"]
-    },
-    "Activity": {
-      "title": "Activity",
-      "description": "Log of administrative actions",
-      "type": "object",
-      "properties": {
-        "admin_id": { "type": "string" },
-        "admin_name": { "type": "string" },
-        "action": { "type": "string" },
-        "details": { "type": "string" },
-        "timestamp": { "type": "string", "format": "date-time" }
-      },
-      "required": ["action", "timestamp"]
     }
   },
   "firestore": {
@@ -168,7 +155,6 @@
     "transactions": { "schema": "Transaction", "description": "Wallet transactions" },
     "withdrawal_requests": { "schema": "WithdrawalRequest", "description": "Withdrawal requests" },
     "notifications": { "schema": "Notification", "description": "Admin notifications" },
-    "push_subscriptions": { "schema": "object", "description": "Web push subscriptions" },
-    "activities": { "schema": "Activity", "description": "Admin activity logs" }
+    "push_subscriptions": { "schema": "object", "description": "Web push subscriptions" }
   }
 }

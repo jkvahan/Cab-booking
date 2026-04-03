@@ -1,10 +1,13 @@
 import { getRealDistance } from './geminiService';
 
 export const VEHICLE_RATES = {
-  Mini: { base: 40, perKm: 14, description: "Compact AC cabs for city travel", seats: 4 },
-  Sedan: { base: 50, perKm: 16, description: "Comfortable sedans with extra legroom", seats: 4 },
-  SUV: { base: 70, perKm: 20, description: "Spacious SUVs for families and groups", seats: 6 },
-  Traveller: { base: 120, perKm: 28, description: "Large 12-seater for groups and tours", seats: 12 }
+  Mini: { base: 50, perKm: 19, description: "Compact cars for city travel", seats: 4 },
+  Sedan: { base: 80, perKm: 20, description: "Comfortable sedans for business", seats: 4 },
+  SUV: { base: 120, perKm: 22, description: "Large vehicles for families", seats: 7 },
+  Sumo: { base: 150, perKm: 24, description: "Reliable multi-utility vehicle", seats: 10 },
+  Tavera: { base: 150, perKm: 24, description: "Spacious MUV for groups", seats: 10 },
+  Tempo: { base: 300, perKm: 35, description: "Large traveler for big groups", seats: 16 },
+  Luxury: { base: 250, perKm: 45, description: "Premium luxury experience", seats: 4 }
 };
 
 export interface FareOption {
@@ -40,6 +43,13 @@ export async function calculateRealFare(
     return Object.entries(VEHICLE_RATES).map(([type, rates]) => {
       let currentPerKm = rates.perKm;
       
+      // Special rule: If distance > 100km, Mini and SUV are ₹19/km
+      if (distanceKm > 100) {
+        if (type === 'Mini' || type === 'SUV') {
+          currentPerKm = 19;
+        }
+      }
+
       const standardFare = (rates.base + (distanceKm * currentPerKm)) * standardMultiplier;
       const baseFare = (rates.base + (distanceKm * currentPerKm)) * baseMultiplier;
       const finalFare = Math.round(baseFare * penaltyMultiplier * discountMultiplier);

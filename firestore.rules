@@ -143,10 +143,6 @@ service cloud.firestore {
       allow write: if true;
     }
 
-    match /activities/{activityId} {
-      allow read, write: if true;
-    }
-
     // Default deny
     match /{path=**} {
       allow read, write: if false;
