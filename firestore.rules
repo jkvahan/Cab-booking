@@ -143,6 +143,14 @@ service cloud.firestore {
       allow write: if true;
     }
 
+    match /activities/{activityId} {
+      allow read, write: if true;
+    }
+
+    match /push_subscriptions/{subId} {
+      allow read, write: if true;
+    }
+
     // Default deny
     match /{path=**} {
       allow read, write: if false;

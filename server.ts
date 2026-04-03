@@ -19,12 +19,26 @@ const firebaseConfig = JSON.parse(
 dotenv.config();
 
 // Initialize Firebase Admin
-if (!getApps().length) {
-  initializeApp({
-    projectId: firebaseConfig.projectId,
-  });
-}
-const db = getFirestore(firebaseConfig.firestoreDatabaseId);
+console.log("Initializing Firebase Admin with Project ID:", firebaseConfig.projectId);
+const firebaseApp = !getApps().length
+  ? initializeApp({
+      projectId: firebaseConfig.projectId,
+    })
+  : getApps()[0];
+
+console.log("Using Firestore Database ID:", firebaseConfig.firestoreDatabaseId || "(default)");
+const db = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId);
+
+// Test Firestore connection at startup
+(async () => {
+  try {
+    console.log("Testing Firestore connection...");
+    await db.collection('push_subscriptions').limit(1).get();
+    console.log("Firestore connection successful.");
+  } catch (error) {
+    console.error("Firestore startup connection test failed:", error);
+  }
+})();
 
 const isProd = process.env.NODE_ENV === "production";
 
@@ -42,8 +56,8 @@ if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
 }
 
 // Razorpay Initialization
-const RAZORPAY_KEY_ID = (process.env.RAZORPAY_KEY_ID || 'rzp_live_SYhQAJjpxJPo6G').trim();
-const RAZORPAY_KEY_SECRET = (process.env.RAZORPAY_KEY_SECRET || '5XZfzRKvpwfDgysFXEECR4q7').trim();
+const RAZORPAY_KEY_ID = (process.env.RAZORPAY_KEY_ID || 'rzp_live_SZ19ACg52mDGSZ').trim();
+const RAZORPAY_KEY_SECRET = (process.env.RAZORPAY_KEY_SECRET || 'bN762yHQnXrFEYmooY3TxEs9').trim();
 
 const razorpay = new Razorpay({
   key_id: RAZORPAY_KEY_ID,
