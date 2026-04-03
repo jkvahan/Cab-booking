@@ -3219,7 +3219,7 @@ export default function App() {
                             setFareOptions([]);
                           }}
                         >
-                          {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16].map(num => (
+                          {[1, 2, 3].map(num => (
                             <option key={num} value={num}>{num} Passenger{num > 1 ? 's' : ''}</option>
                           ))}
                         </motion.select>
