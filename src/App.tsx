@@ -32,7 +32,8 @@ import {
   Edit2,
   PlusCircle,
   Zap,
-  XCircle
+  XCircle,
+  Activity
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -55,8 +56,6 @@ import {
   runTransaction
 } from 'firebase/firestore';
 import { 
-  signInWithPopup, 
-  GoogleAuthProvider, 
   onAuthStateChanged, 
   signOut
 } from 'firebase/auth';
@@ -149,7 +148,7 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { has
             <p className="text-zinc-600 leading-relaxed">{errorMessage}</p>
             <button 
               onClick={() => window.location.reload()}
-              className="w-full bg-zinc-900 text-white py-4 rounded-2xl font-bold hover:bg-zinc-800 transition-all"
+              className="w-full bg-brand-primary text-white py-4 rounded-2xl font-bold hover:bg-brand-primary/90 transition-all shadow-lg shadow-indigo-200"
             >
               Reload Application
             </button>
@@ -304,7 +303,7 @@ const Navbar = ({ activeView, setView, onLogout, user }: { activeView: View, set
           <motion.div 
             initial={{ scale: 0 }}
             animate={{ scale: 1 }}
-            className="flex items-center gap-2 px-4 py-1.5 bg-zinc-900 text-white rounded-full shadow-lg border border-white/10"
+            className="flex items-center gap-2 px-4 py-1.5 bg-brand-primary text-white rounded-full shadow-lg border border-white/10"
           >
             <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
             <span className="text-[10px] font-black uppercase tracking-widest">
@@ -402,6 +401,22 @@ export default function App() {
   });
   const [isAuthReady, setIsAuthReady] = useState(false);
 
+  const logActivity = async (action: string, details: string) => {
+    if (!user || (user.role !== 'admin' && user.role !== 'owner')) return;
+    try {
+      await addDoc(collection(db, 'activities'), {
+        admin_id: user.id || (user as any).uid || 'unknown',
+        admin_name: user.name || (user as any).username || 'Admin',
+        admin_role: user.role,
+        action,
+        details,
+        timestamp: new Date().toISOString()
+      });
+    } catch (err) {
+      console.error("Error logging activity:", err);
+    }
+  };
+
   useEffect(() => {
     // Register Service Worker for Push Notifications
     if ('serviceWorker' in navigator) {
@@ -441,36 +456,6 @@ export default function App() {
     */
 
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-      if (firebaseUser) {
-        // If logged in via Google, fetch profile
-        try {
-          const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
-          if (userDoc.exists()) {
-            const userData = { ...userDoc.data(), id: firebaseUser.uid, role: 'user' };
-            setUser(userData);
-            localStorage.setItem('vahan_user', JSON.stringify(userData));
-            if (view !== 'user') setView('user');
-          } else {
-            const driverDoc = await getDoc(doc(db, 'drivers', firebaseUser.uid));
-            if (driverDoc.exists()) {
-              const driverData = { ...driverDoc.data(), id: firebaseUser.uid, role: 'driver' };
-              setUser(driverData);
-              localStorage.setItem('vahan_user', JSON.stringify(driverData));
-              if (view !== 'driver') setView('driver');
-            } else {
-              const adminDoc = await getDoc(doc(db, 'admins', firebaseUser.uid));
-              if (adminDoc.exists()) {
-                const adminData = { ...adminDoc.data(), id: firebaseUser.uid, role: 'admin' };
-                setUser(adminData);
-                localStorage.setItem('vahan_user', JSON.stringify(adminData));
-                if (view !== 'admin') setView('admin');
-              }
-            }
-          }
-        } catch (err) {
-          console.error("Error fetching Google user profile:", err);
-        }
-      }
       setIsAuthReady(true);
     });
     return () => unsubscribe();
@@ -629,6 +614,7 @@ export default function App() {
     distance: ''
   });
 
+  const [activities, setActivities] = useState<any[]>([]);
   const [reviewModal, setReviewModal] = useState<{ rideId: string, driverName: string } | null>(null);
   const [rating, setRating] = useState(5);
   const [reviewMessage, setReviewMessage] = useState('');
@@ -641,7 +627,7 @@ export default function App() {
   const [forwardToAdminId, setForwardToAdminId] = useState<string>('');
 
   // Driver Data
-  const [driverRidesTab, setDriverRidesTab] = useState<'available' | 'accepted' | 'completed'>('available');
+  const [driverRidesTab, setDriverRidesTab] = useState<'all' | 'available' | 'accepted' | 'completed'>('all');
   const [availableRides, setAvailableRides] = useState<Ride[]>([]);
   const [driverWallet, setDriverWallet] = useState({ balance: 0, transactions: [] });
   const [driverWithdrawals, setDriverWithdrawals] = useState<any[]>([]);
@@ -935,12 +921,19 @@ export default function App() {
         setAdminUsers(users);
       }, (err) => handleFirestoreError(err, OperationType.LIST, 'users'));
 
+      let unsubscribeActivities: (() => void) | undefined;
       // Only owner can see other admins
       if (user.role === 'owner') {
         unsubscribeAdmins = onSnapshot(collection(db, 'admins'), (snapshot) => {
           const admins = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as AdminUser));
           setOtherAdmins(admins);
         }, (err) => handleFirestoreError(err, OperationType.LIST, 'admins'));
+
+        const qActivities = query(collection(db, 'activities'), orderBy('timestamp', 'desc'), limit(100));
+        unsubscribeActivities = onSnapshot(qActivities, (snapshot) => {
+          const acts = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id }));
+          setActivities(acts);
+        }, (err) => handleFirestoreError(err, OperationType.LIST, 'activities'));
       }
     }
 
@@ -957,77 +950,11 @@ export default function App() {
       unsubscribeDriverTransactions?.();
       unsubscribeAdmins?.();
       unsubscribeUsers?.();
+      unsubscribeActivities?.();
     };
   }, [view, user, isAuthReady]);
 
   const fetchUserRides = () => {};
-
-  const handleGoogleLogin = async (targetRole: 'user' | 'driver' = 'user') => {
-    setError('');
-    try {
-      const provider = new GoogleAuthProvider();
-      const result = await signInWithPopup(auth, provider);
-      const firebaseUser = result.user;
-      
-      // Check if user exists in any collection
-      const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
-      if (userDoc.exists()) {
-        setUser({ ...userDoc.data(), id: firebaseUser.uid, role: 'user' });
-      } else {
-        const driverDoc = await getDoc(doc(db, 'drivers', firebaseUser.uid));
-        if (driverDoc.exists()) {
-          setUser({ ...driverDoc.data(), id: firebaseUser.uid, role: 'driver' });
-        } else {
-          const adminDoc = await getDoc(doc(db, 'admins', firebaseUser.uid));
-          if (adminDoc.exists()) {
-            setUser({ ...adminDoc.data(), id: firebaseUser.uid });
-          } else {
-            // Check if email already exists in the other collection
-            const otherCollection = targetRole === 'driver' ? 'users' : 'drivers';
-            const qEmail = query(collection(db, otherCollection), where('email', '==', firebaseUser.email), limit(1));
-            const snapshotEmail = await getDocs(qEmail);
-            
-            if (!snapshotEmail.empty) {
-              setError(`This email is already registered as a ${targetRole === 'driver' ? 'Passenger' : 'Driver'}. You cannot have both profiles.`);
-              return;
-            }
-
-            // New account via Google: Use the targetRole
-            const collectionName = targetRole === 'driver' ? 'drivers' : 'users';
-            const data = targetRole === 'driver' ? {
-              name: firebaseUser.displayName || 'Google Driver',
-              phone: firebaseUser.phoneNumber || '',
-              email: firebaseUser.email || '',
-              wallet_balance: 0,
-              status: 'pending',
-              created_at: new Date().toISOString(),
-              role: 'driver'
-            } : {
-              name: firebaseUser.displayName || 'Google User',
-              phone: firebaseUser.phoneNumber || '',
-              email: firebaseUser.email || '',
-              created_at: new Date().toISOString(),
-              role: 'user',
-              consecutive_cancellations: 0
-            };
-            await setDoc(doc(db, collectionName, firebaseUser.uid), data);
-            setUser({ ...data, id: firebaseUser.uid });
-          }
-        }
-      }
-      setToast({ message: 'Login successful!', type: 'success' });
-      
-      // Auto-subscribe to notifications
-      subscribeToPushNotifications();
-    } catch (err: any) {
-      console.error("Google Login Error:", err);
-      if (err.code === 'auth/operation-not-allowed') {
-        setError('Google Login is not enabled in Firebase Console. Please enable it under Authentication > Sign-in method.');
-      } else {
-        setError(err.message || 'Google Login failed');
-      }
-    }
-  };
 
   const handleUserLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1268,6 +1195,7 @@ export default function App() {
       onConfirm: async () => {
         try {
           await deleteDoc(doc(db, 'users', userId));
+          await logActivity('Delete User', `User ID: ${userId}`);
           setToast({ message: 'User deleted successfully', type: 'success' });
         } catch (err) {
           handleFirestoreError(err, OperationType.DELETE, `users/${userId}`);
@@ -1283,6 +1211,7 @@ export default function App() {
       onConfirm: async () => {
         try {
           await deleteDoc(doc(db, 'drivers', driverId));
+          await logActivity('Delete Driver', `Driver ID: ${driverId}`);
           // Also delete associated vehicle if exists
           const vq = query(collection(db, 'vehicles'), where('driver_id', '==', driverId));
           const vSnap = await getDocs(vq);
@@ -1323,6 +1252,7 @@ export default function App() {
       onConfirm: async () => {
         try {
           await deleteDoc(doc(db, 'admins', adminId));
+          await logActivity('Delete Admin', `Admin ID: ${adminId}`);
           setToast({ message: 'Admin profile deleted successfully', type: 'success' });
         } catch (err) {
           handleFirestoreError(err, OperationType.DELETE, `admins/${adminId}`);
@@ -1368,6 +1298,7 @@ export default function App() {
         permissions: newAdmin.permissions,
         created_at: new Date().toISOString()
       });
+      await logActivity('Add Admin', `Username: ${newAdmin.username}`);
       setNewAdmin({ 
         username: '', 
         password: '', 
@@ -1396,6 +1327,10 @@ export default function App() {
         created_at: new Date().toISOString(),
         read_by: []
       });
+      
+      // Log activity
+      await logActivity('Send Notification', `Target: ${newNotification.target}, Message: ${newNotification.message.substring(0, 50)}...`);
+
       setNewNotification({ message: '', target: 'all_drivers', driver_id: '', user_id: '' });
       setToast({ message: 'Notification sent successfully!', type: 'success' });
     } catch (err) {
@@ -1603,6 +1538,9 @@ export default function App() {
       };
 
       await addDoc(collection(db, 'rides'), rideData);
+      
+      // Log activity
+      await logActivity('Manual Add Ride', `Tracking ID: ${rideData.tracking_id}, User: ${rideData.user_name}, Fare: ₹${rideData.fare}`);
       
       // Send Notifications
       sendNotification('NEW_RIDE', {
@@ -2780,6 +2718,7 @@ export default function App() {
   const setDriverStatus = async (driverId: string, newStatus: 'active' | 'inactive' | 'under verification' | 'documents received' | 'rejected' | 'documents not received') => {
     try {
       await updateDoc(doc(db, 'drivers', driverId), { status: newStatus });
+      await logActivity('Update Driver Status', `Driver ID: ${driverId}, New Status: ${newStatus}`);
       setToast({ message: `Driver status updated to ${newStatus}`, type: 'success' });
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `drivers/${driverId}`);
@@ -2790,6 +2729,7 @@ export default function App() {
     const newStatus = currentStatus === 'active' ? 'inactive' : 'active';
     try {
       await updateDoc(doc(db, 'drivers', driverId), { status: newStatus });
+      await logActivity('Toggle Driver Status', `Driver ID: ${driverId}, New Status: ${newStatus}`);
       setToast({ message: `Driver status updated to ${newStatus}`, type: 'success' });
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `drivers/${driverId}`);
@@ -2870,7 +2810,7 @@ export default function App() {
         <div className="absolute top-[30%] right-[10%] w-[30%] h-[30%] bg-rose-500/10 rounded-full blur-[120px] animate-pulse" style={{ animationDelay: '4s' }} />
       </div>
 
-      <main className={`${user ? 'pt-20' : 'pt-8'} pb-12 px-3 sm:px-4 max-w-4xl mx-auto`}>
+      <main className={`${user ? 'pt-32' : 'pt-28'} pb-12 px-3 sm:px-4 max-w-4xl mx-auto`}>
       <AnimatePresence mode="wait">
           {/* USER VIEW */}
           {view === 'user' && (
@@ -2897,7 +2837,7 @@ export default function App() {
                     <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-orange-500/10 to-rose-500/10 rounded-full -mr-16 -mt-16 blur-2xl" />
                     
                     <h2 className="text-xl sm:text-2xl font-black mb-8 flex items-center gap-3">
-                      <div className="p-2 bg-zinc-900 rounded-xl shadow-lg shrink-0">
+                      <div className="p-2 bg-brand-primary rounded-xl shadow-lg shrink-0">
                         <User className="text-white w-6 h-6" /> 
                       </div>
                       <span className="gradient-text truncate max-w-[200px] sm:max-w-none">
@@ -2917,7 +2857,7 @@ export default function App() {
                             type="text"
                             placeholder="Full Name"
                             required
-                            className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900"
+                            className="w-full px-4 py-3 bg-rose-50 border border-rose-100 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-primary"
                             value={userLoginData.name}
                             onChange={e => setUserLoginData({ ...userLoginData, name: e.target.value })}
                           />
@@ -2926,7 +2866,7 @@ export default function App() {
                           type="tel"
                           placeholder="Phone Number (e.g. 9876543210)"
                           required
-                          className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900"
+                          className="w-full px-4 py-3 bg-rose-50 border border-rose-100 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-primary"
                           value={userLoginData.phone}
                           onChange={e => setUserLoginData({ ...userLoginData, phone: e.target.value })}
                         />
@@ -2934,7 +2874,7 @@ export default function App() {
                           type="password"
                           placeholder="Password"
                           required
-                          className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900"
+                          className="w-full px-4 py-3 bg-rose-50 border border-rose-100 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-primary"
                           value={userLoginData.password}
                           onChange={e => setUserLoginData({ ...userLoginData, password: e.target.value })}
                         />
@@ -2958,31 +2898,12 @@ export default function App() {
                           whileHover={{ scale: 1.02 }}
                           whileTap={{ scale: 0.98 }}
                           disabled={isVerifying}
-                          className="w-full bg-gradient-to-r from-zinc-900 to-zinc-800 text-white py-4 rounded-2xl font-black shadow-xl hover:shadow-2xl transition-all btn-3d disabled:opacity-50"
+                          className="w-full bg-brand-primary text-white py-4 rounded-2xl font-black shadow-xl hover:shadow-2xl transition-all btn-3d disabled:opacity-50"
                         >
                           {isVerifying ? 'Verifying...' : (userAuthMode === 'login' ? 'Login' : 'Register')}
                         </motion.button>
                       </form>
 
-                      <div className="mt-6 space-y-4">
-                          <div className="relative">
-                            <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-zinc-200"></div></div>
-                            <div className="relative flex justify-center text-xs uppercase"><span className="bg-white px-2 text-zinc-400 font-bold">Or continue with</span></div>
-                          </div>
-                          
-                          <button
-                            onClick={() => handleGoogleLogin('user')}
-                            className="w-full flex items-center justify-center gap-3 px-4 py-3 bg-white border border-zinc-200 rounded-xl font-bold hover:bg-zinc-50 transition-all shadow-sm"
-                          >
-                            <svg className="w-5 h-5" viewBox="0 0 24 24">
-                              <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-                              <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-                              <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/>
-                              <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
-                            </svg>
-                            Google
-                          </button>
-                        </div>
                         <div className="mt-6 text-center space-y-2">
                           <button 
                             onClick={() => {
@@ -3030,7 +2951,7 @@ export default function App() {
                             </div>
                             <button 
                               onClick={() => setIsRechargeModalOpen(true)}
-                              className="p-2 bg-zinc-900 text-white rounded-xl hover:bg-zinc-800 transition-all shadow-lg"
+                              className="p-2 bg-brand-primary text-white rounded-xl hover:bg-brand-primary/90 transition-all shadow-lg"
                             >
                               <PlusCircle className="w-5 h-5" />
                             </button>
@@ -3066,7 +2987,7 @@ export default function App() {
                       animate={{ y: 0, opacity: 1 }}
                       className="text-3xl sm:text-4xl font-black tracking-tighter"
                     >
-                      Hello, <span className="gradient-text">{(user.name || user.username || 'User').split(' ')[0]}!</span>
+                      Welcome, <span className="gradient-text">{(user.name || user.username || 'User').split(' ')[0]}!</span>
                     </motion.h1>
                     <p className="text-zinc-500 font-medium">Ready for your next adventure?</p>
                   </div>
@@ -3082,7 +3003,7 @@ export default function App() {
                       <button
                         onClick={() => setBookingData({ ...bookingData, tripType: 'single' })}
                         className={`flex-1 py-3 text-sm font-black rounded-xl transition-all ${
-                          bookingData.tripType === 'single' ? 'bg-zinc-900 shadow-xl text-white scale-105' : 'text-zinc-500 hover:text-zinc-900'
+                          bookingData.tripType === 'single' ? 'bg-brand-primary shadow-xl text-white scale-105' : 'text-zinc-500 hover:text-brand-primary'
                         }`}
                       >
                         Single Trip
@@ -3090,7 +3011,7 @@ export default function App() {
                       <button
                         onClick={() => setBookingData({ ...bookingData, tripType: 'round' })}
                         className={`flex-1 py-3 text-sm font-black rounded-xl transition-all ${
-                          bookingData.tripType === 'round' ? 'bg-zinc-900 shadow-xl text-white scale-105' : 'text-zinc-500 hover:text-zinc-900'
+                          bookingData.tripType === 'round' ? 'bg-brand-primary shadow-xl text-white scale-105' : 'text-zinc-500 hover:text-brand-primary'
                         }`}
                       >
                         Round Trip
@@ -3114,7 +3035,7 @@ export default function App() {
                           ref={pickupRef}
                           type="text"
                           placeholder="Pickup Location"
-                          className="w-full pl-12 pr-12 py-4 bg-white/50 border border-zinc-200 rounded-2xl focus:outline-none focus:ring-4 focus:ring-zinc-900/5 focus:bg-white transition-all shadow-sm hover:shadow-md"
+                          className="w-full pl-12 pr-12 py-4 bg-white/50 border border-zinc-200 rounded-2xl focus:outline-none focus:ring-4 focus:ring-brand-primary/5 focus:bg-white transition-all shadow-sm hover:shadow-md"
                           value={bookingData.pickup}
                           onChange={e => {
                             setBookingData({ ...bookingData, pickup: e.target.value });
@@ -3236,7 +3157,7 @@ export default function App() {
                         whileTap={{ scale: 0.98 }}
                         onClick={handleFindRides}
                         disabled={isEstimating || !bookingData.pickup || !bookingData.dropoff}
-                        className="w-full bg-zinc-900 text-white py-5 rounded-3xl font-black shadow-xl hover:shadow-2xl transition-all disabled:opacity-50 flex items-center justify-center gap-3 btn-3d relative overflow-hidden group"
+                        className="w-full bg-brand-primary text-white py-5 rounded-3xl font-black shadow-xl hover:shadow-2xl transition-all disabled:opacity-50 flex items-center justify-center gap-3 btn-3d relative overflow-hidden group"
                       >
                         <div className="absolute inset-0 shimmer opacity-0 group-hover:opacity-100 transition-opacity" />
                         {isEstimating ? (
@@ -3280,7 +3201,7 @@ export default function App() {
                                 onClick={() => setSelectedOption(option)}
                                 className={`flex items-center justify-between p-2 rounded-2xl border-2 transition-all relative overflow-hidden group ${
                                   selectedOption?.type === option.type 
-                                  ? 'border-zinc-900 bg-zinc-900 text-white shadow-2xl -translate-y-0.5' 
+                                  ? 'border-brand-primary bg-brand-primary text-white shadow-2xl -translate-y-0.5' 
                                   : 'glass p-2 hover:border-zinc-300 hover:-translate-y-0.5 shadow-sm hover:shadow-md'
                                 }`}
                               >
@@ -3517,7 +3438,7 @@ export default function App() {
                 </>
               )}
 
-              <div className="bg-zinc-900 text-white p-6 rounded-2xl shadow-lg space-y-4 mt-8">
+              <div className="bg-brand-dark text-white p-6 rounded-2xl shadow-lg space-y-4 mt-8">
                 <h2 className="text-lg font-bold flex items-center gap-2">
                   <Search className="w-5 h-5" /> Track Any Ride
                 </h2>
@@ -3575,7 +3496,7 @@ export default function App() {
                       <div className="flex flex-col items-center gap-1">
                         <div className="w-3 h-3 rounded-full bg-emerald-500" />
                         <div className="w-0.5 h-full bg-zinc-200" />
-                        <div className="w-3 h-3 rounded-full bg-zinc-900" />
+                        <div className="w-3 h-3 rounded-full bg-brand-primary" />
                       </div>
                       <div className="flex-1 space-y-4">
                         <div>
@@ -3662,7 +3583,7 @@ export default function App() {
                     >
                       <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-orange-500/10 to-rose-500/10 rounded-full -mr-16 -mt-16 blur-2xl" />
                       <h2 className="text-2xl sm:text-3xl font-black mb-8 flex items-center gap-3">
-                        <div className="p-2 bg-zinc-900 rounded-xl shadow-lg shrink-0">
+                        <div className="p-2 bg-brand-primary rounded-xl shadow-lg shrink-0">
                           <ShieldCheck className="text-white w-6 h-6" /> 
                         </div>
                         <span className="gradient-text truncate">Admin Login</span>
@@ -3694,7 +3615,7 @@ export default function App() {
                             </>
                           ) : (
                             <div className="space-y-4">
-                              <div className="p-4 bg-zinc-900 text-white rounded-xl text-center">
+                              <div className="p-4 bg-brand-primary text-white rounded-xl text-center">
                                 <p className="text-xs font-bold uppercase tracking-widest opacity-60 mb-1">Step 2</p>
                                 <p className="text-sm">Enter Secure PIN</p>
                               </div>
@@ -3710,7 +3631,7 @@ export default function App() {
                             </div>
                           )}
                           
-                          <button className="w-full bg-zinc-900 text-white py-3 rounded-xl font-bold hover:bg-zinc-800 transition-all">
+                          <button className="w-full bg-brand-primary text-white py-3 rounded-xl font-bold hover:bg-brand-primary/90 transition-all shadow-lg">
                             {adminLoginStep === 'credentials' ? 'Continue' : 'Verify & Login'}
                           </button>
                           
@@ -3739,7 +3660,10 @@ export default function App() {
                       user?.role === 'admin' || user?.role === 'owner' ? (
                       <div className="space-y-8">
                         <div className="flex items-center justify-between mb-8">
-                          <h1 className="text-2xl sm:text-3xl font-black tracking-tighter gradient-text">Admin Command Center</h1>
+                          <div className="space-y-1">
+                            <h1 className="text-2xl sm:text-3xl font-black tracking-tighter gradient-text">Admin Command Center</h1>
+                            <p className="text-zinc-500 text-sm font-medium">Welcome, <span className="font-bold text-zinc-900">{user.username || user.name || 'Admin'}</span></p>
+                          </div>
                           <div className="flex items-center gap-2 px-4 py-2 glass rounded-2xl">
                             <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
                             <span className="text-xs font-black uppercase tracking-widest">System Live</span>
@@ -3801,58 +3725,58 @@ export default function App() {
                         </div>
 
                         {user.role === 'owner' && (
-                          <div className="bg-zinc-900 text-white p-8 rounded-[2.5rem] relative overflow-hidden shadow-2xl">
+                          <div className="bg-brand-dark text-white p-5 rounded-3xl relative overflow-hidden shadow-2xl">
                             <div className="absolute top-0 right-0 w-64 h-64 bg-emerald-500/10 rounded-full -mr-32 -mt-32 blur-3xl" />
                             <div className="relative z-10">
-                              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-8 mb-8">
-                                <div className="space-y-2">
-                                  <h3 className="text-2xl font-black tracking-tight flex items-center gap-3">
-                                    <div className="p-2 bg-emerald-500/20 rounded-xl">
-                                      <Settings className="w-6 h-6 text-emerald-400" />
+                              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 mb-4">
+                                <div className="space-y-1">
+                                  <h3 className="text-lg font-black tracking-tight flex items-center gap-2">
+                                    <div className="p-1.5 bg-emerald-500/20 rounded-lg">
+                                      <Settings className="w-4 h-4 text-emerald-400" />
                                     </div>
                                     System Health & Memory
                                   </h3>
-                                  <p className="text-zinc-400 text-sm max-w-md leading-relaxed">
+                                  <p className="text-zinc-400 text-xs max-w-md leading-relaxed">
                                     Real-time monitoring of database storage and document limits. 
                                     Free tier (Spark) provides 1GB storage.
                                   </p>
                                 </div>
-                                <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 w-full lg:w-auto">
-                                  <div className="text-center p-5 bg-white/5 rounded-3xl border border-white/10 backdrop-blur-sm">
-                                    <p className="text-[10px] uppercase font-black tracking-widest text-zinc-500 mb-2">Total Rides</p>
-                                    <p className="text-2xl font-black">{adminRides.length}</p>
+                                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 w-full lg:w-auto">
+                                  <div className="text-center p-3 bg-white/5 rounded-2xl border border-white/10 backdrop-blur-sm">
+                                    <p className="text-[9px] uppercase font-black tracking-widest text-zinc-500 mb-1">Total Rides</p>
+                                    <p className="text-lg font-black">{adminRides.length}</p>
                                   </div>
-                                  <div className="text-center p-5 bg-white/5 rounded-3xl border border-white/10 backdrop-blur-sm">
-                                    <p className="text-[10px] uppercase font-black tracking-widest text-zinc-500 mb-2">Total Users</p>
-                                    <p className="text-2xl font-black">{adminUsers.length}</p>
+                                  <div className="text-center p-3 bg-white/5 rounded-2xl border border-white/10 backdrop-blur-sm">
+                                    <p className="text-[9px] uppercase font-black tracking-widest text-zinc-500 mb-1">Total Users</p>
+                                    <p className="text-lg font-black">{adminUsers.length}</p>
                                   </div>
-                                  <div className="text-center p-5 bg-white/5 rounded-3xl border border-white/10 backdrop-blur-sm col-span-2 sm:col-span-1">
-                                    <p className="text-[10px] uppercase font-black tracking-widest text-zinc-500 mb-2">Memory Left</p>
-                                    <p className="text-2xl font-black text-emerald-400">
+                                  <div className="text-center p-3 bg-white/5 rounded-2xl border border-white/10 backdrop-blur-sm col-span-2 sm:col-span-1">
+                                    <p className="text-[9px] uppercase font-black tracking-widest text-zinc-500 mb-1">Memory Left</p>
+                                    <p className="text-lg font-black text-emerald-400">
                                       {(100 - Math.min(100, (adminRides.length + adminUsers.length + adminDrivers.length) / 100)).toFixed(1)}%
                                     </p>
                                   </div>
                                 </div>
                               </div>
                               
-                              <div className="space-y-4 bg-white/5 p-6 rounded-3xl border border-white/10">
-                                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+                              <div className="space-y-3 bg-white/5 p-4 rounded-2xl border border-white/10">
+                                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-1">
                                   <div className="flex items-center gap-2">
-                                    <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse" />
-                                    <p className="text-[10px] uppercase font-black tracking-widest text-zinc-400">Storage Capacity Utilization</p>
+                                    <div className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse" />
+                                    <p className="text-[9px] uppercase font-black tracking-widest text-zinc-400">Storage Capacity Utilization</p>
                                   </div>
-                                  <p className="text-[10px] font-black text-emerald-400 bg-emerald-400/10 px-2 py-1 rounded-lg">
+                                  <p className="text-[9px] font-black text-emerald-400 bg-emerald-400/10 px-1.5 py-0.5 rounded-md">
                                     {(adminRides.length + adminUsers.length + adminDrivers.length)} / 10,000 Documents (Estimated)
                                   </p>
                                 </div>
-                                <div className="w-full bg-white/5 h-4 rounded-full overflow-hidden border border-white/10 p-1">
+                                <div className="w-full bg-white/5 h-2 rounded-full overflow-hidden border border-white/10 p-0.5">
                                   <motion.div 
                                     initial={{ width: 0 }}
                                     animate={{ width: `${Math.min(100, (adminRides.length + adminUsers.length + adminDrivers.length) / 100)}%` }}
-                                    className="bg-gradient-to-r from-emerald-500 via-emerald-400 to-teal-400 h-full rounded-full shadow-[0_0_15px_rgba(52,211,153,0.3)]"
+                                    className="bg-gradient-to-r from-emerald-500 via-emerald-400 to-teal-400 h-full rounded-full shadow-[0_0_10px_rgba(52,211,153,0.3)]"
                                   />
                                 </div>
-                                <div className="flex justify-between text-[9px] font-bold text-zinc-500 uppercase tracking-tighter">
+                                <div className="flex justify-between text-[8px] font-bold text-zinc-500 uppercase tracking-tighter">
                                   <span>0% Used</span>
                                   <span>50% Warning</span>
                                   <span>100% Limit</span>
@@ -3860,6 +3784,61 @@ export default function App() {
                               </div>
                             </div>
                           </div>
+                        )}
+
+                        {user.role === 'owner' && (
+                          <motion.div 
+                            initial={{ y: 20, opacity: 0 }}
+                            animate={{ y: 0, opacity: 1 }}
+                            className="glass rounded-[2.5rem] overflow-hidden border border-zinc-200 shadow-xl"
+                          >
+                            <div className="p-6 bg-zinc-900 text-white flex items-center justify-between">
+                              <div className="flex items-center gap-3">
+                                <div className="p-2 bg-white/10 rounded-xl">
+                                  <Activity className="w-5 h-5 text-white" />
+                                </div>
+                                <div>
+                                  <h3 className="font-bold text-lg leading-tight">Admin Activity Logs</h3>
+                                  <p className="text-zinc-400 text-[10px] font-black uppercase tracking-widest">Real-time tracking of admin actions</p>
+                                </div>
+                              </div>
+                              <div className="px-3 py-1 bg-white/10 rounded-full text-[10px] font-black uppercase tracking-widest">
+                                {activities.length} Logs
+                              </div>
+                            </div>
+                            <div className="p-6">
+                              <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
+                                {activities.length === 0 ? (
+                                  <div className="text-center py-10 text-zinc-400 italic text-sm">No activities logged yet.</div>
+                                ) : (
+                                  activities.map((log, i) => (
+                                    <motion.div 
+                                      key={log.id}
+                                      initial={{ x: -10, opacity: 0 }}
+                                      animate={{ x: 0, opacity: 1 }}
+                                      transition={{ delay: i * 0.05 }}
+                                      className="p-4 bg-zinc-50 rounded-2xl border border-zinc-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3 group hover:bg-white hover:shadow-md transition-all"
+                                    >
+                                      <div className="flex items-start gap-3">
+                                        <div className="p-2 bg-zinc-200 rounded-xl group-hover:bg-brand-primary/10 group-hover:text-brand-primary transition-colors">
+                                          <User className="w-4 h-4" />
+                                        </div>
+                                        <div>
+                                          <p className="text-sm font-bold text-zinc-900">{log.admin_name} <span className="text-zinc-400 font-medium text-xs">({log.admin_role})</span></p>
+                                          <p className="text-xs font-black text-brand-primary uppercase tracking-widest mt-0.5">{log.action}</p>
+                                          <p className="text-xs text-zinc-500 mt-1">{log.details}</p>
+                                        </div>
+                                      </div>
+                                      <div className="text-right shrink-0">
+                                        <p className="text-[10px] font-black text-zinc-400 uppercase tracking-widest">{new Date(log.timestamp).toLocaleDateString()}</p>
+                                        <p className="text-xs font-bold text-zinc-900">{new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                                      </div>
+                                    </motion.div>
+                                  ))
+                                )}
+                              </div>
+                            </div>
+                          </motion.div>
                         )}
 
                   {user.role === 'owner' && (
@@ -3900,7 +3879,7 @@ export default function App() {
                             <option value="admin">Admin</option>
                             <option value="owner">Owner</option>
                           </select>
-                          <button className="bg-zinc-900 text-white px-4 py-2 rounded-lg text-sm font-bold">Add Admin</button>
+                          <button className="bg-brand-primary text-white px-4 py-2 rounded-lg text-sm font-bold">Add Admin</button>
                         </form>
                         
                         <div className="bg-zinc-50 p-4 rounded-xl border border-zinc-100 space-y-3">
@@ -3991,7 +3970,7 @@ export default function App() {
                           value={changeCreds.pin}
                           onChange={e => setChangeCreds({ ...changeCreds, pin: e.target.value.replace(/\D/g, '').slice(0, 4) })}
                         />
-                        <button className="bg-zinc-900 text-white px-4 py-2 rounded-lg text-sm font-bold">Update Credentials</button>
+                        <button className="bg-brand-primary text-white px-4 py-2 rounded-lg text-sm font-bold">Update Credentials</button>
                       </form>
                     </div>
                   </div>
@@ -4063,7 +4042,7 @@ export default function App() {
                         </div>
                         <button 
                           disabled={isSendingNotification}
-                          className="w-full bg-zinc-900 text-white py-3 rounded-xl font-bold hover:bg-zinc-800 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                          className="w-full bg-brand-primary text-white py-3 rounded-xl font-bold hover:bg-brand-primary/90 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
                         >
                           {isSendingNotification ? (
                             <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
@@ -4386,7 +4365,7 @@ export default function App() {
                                 {driver.status !== 'active' && (
                                   <button
                                     onClick={() => setDriverStatus(driver.id, 'active')}
-                                    className="px-4 py-2 bg-zinc-900 text-white rounded-lg text-xs font-bold hover:bg-zinc-800 shadow-md transition-all"
+                                    className="px-4 py-2 bg-brand-primary text-white rounded-lg text-xs font-bold hover:bg-brand-primary/90 shadow-md transition-all"
                                   >
                                     Approve & Activate
                                   </button>
@@ -4419,7 +4398,7 @@ export default function App() {
                                 onClick={() => setIsRidesBulkDeleteEnabled(!isRidesBulkDeleteEnabled)}
                                 className={`px-3 py-1.5 rounded-xl text-[10px] font-bold uppercase tracking-wider transition-all ${
                                   isRidesBulkDeleteEnabled 
-                                  ? 'bg-zinc-900 text-white shadow-lg' 
+                                  ? 'bg-brand-primary text-white shadow-lg' 
                                   : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
                                 }`}
                               >
@@ -4451,7 +4430,7 @@ export default function App() {
                         {(user.role === 'owner' || user.permissions?.rides) && (
                           <button 
                             onClick={() => setIsManualRideModalOpen(true)}
-                            className="flex items-center gap-2 px-4 py-2 bg-zinc-900 text-white rounded-xl text-xs font-bold hover:bg-zinc-800 transition-all shadow-lg"
+                            className="flex items-center gap-2 px-4 py-2 bg-brand-primary text-white rounded-xl text-xs font-bold hover:bg-brand-primary/90 transition-all shadow-lg"
                           >
                             <Plus className="w-4 h-4" />
                             Manual Add Ride
@@ -4649,13 +4628,13 @@ export default function App() {
                   )}
 
                   {selectedDriverTransactions && (
-                    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                    <div className="fixed inset-0 bg-brand-dark/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
                       <motion.div 
                         initial={{ opacity: 0, scale: 0.9 }}
                         animate={{ opacity: 1, scale: 1 }}
                         className="bg-white w-full max-w-2xl rounded-3xl shadow-2xl overflow-hidden max-h-[80vh] flex flex-col"
                       >
-                        <div className="p-6 border-b border-zinc-100 flex justify-between items-center bg-zinc-900 text-white">
+                        <div className="p-6 border-b border-zinc-100 flex justify-between items-center bg-brand-dark text-white">
                           <div>
                             <h3 className="font-bold text-xl">{selectedDriverTransactions.name}'s Transactions</h3>
                             <div className="flex items-center gap-2 mt-1">
@@ -4746,7 +4725,7 @@ export default function App() {
                     </div>
                   )}
                   {complaintReplyModal && (
-                    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                    <div className="fixed inset-0 bg-brand-dark/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
                       <motion.div 
                         initial={{ opacity: 0, scale: 0.9 }}
                         animate={{ opacity: 1, scale: 1 }}
@@ -4861,13 +4840,13 @@ export default function App() {
                   )}
 
                   {editingAdmin && (
-                    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                    <div className="fixed inset-0 bg-brand-dark/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
                       <motion.div 
                         initial={{ opacity: 0, scale: 0.9 }}
                         animate={{ opacity: 1, scale: 1 }}
                         className="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden"
                       >
-                        <div className="p-6 border-b border-zinc-100 flex justify-between items-center bg-zinc-900 text-white">
+                        <div className="p-6 border-b border-zinc-100 flex justify-between items-center bg-brand-dark text-white">
                           <h3 className="font-bold text-xl">Edit Admin</h3>
                           <button onClick={() => setEditingAdmin(null)} className="p-2 hover:bg-white/10 rounded-full transition-colors">
                             <X className="w-6 h-6" />
@@ -4921,7 +4900,7 @@ export default function App() {
                               ))}
                             </div>
                           </div>
-                          <button className="w-full bg-zinc-900 text-white py-3 rounded-xl font-bold hover:bg-zinc-800 transition-all">
+                          <button className="w-full bg-brand-primary text-white py-3 rounded-xl font-bold hover:bg-brand-primary/90 transition-all shadow-lg">
                             Update Admin
                           </button>
                         </form>
@@ -4930,13 +4909,13 @@ export default function App() {
                   )}
 
                   {editingUser && (
-                    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                    <div className="fixed inset-0 bg-brand-dark/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
                       <motion.div 
                         initial={{ opacity: 0, scale: 0.9 }}
                         animate={{ opacity: 1, scale: 1 }}
                         className="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden"
                       >
-                        <div className="p-6 border-b border-zinc-100 flex justify-between items-center bg-zinc-900 text-white">
+                        <div className="p-6 border-b border-zinc-100 flex justify-between items-center bg-brand-dark text-white">
                           <h3 className="font-bold text-xl">Edit User</h3>
                           <button onClick={() => setEditingUser(null)} className="p-2 hover:bg-white/10 rounded-full transition-colors">
                             <X className="w-6 h-6" />
@@ -4970,7 +4949,7 @@ export default function App() {
                               onChange={e => setEditingUser({ ...editingUser, password: e.target.value })}
                             />
                           </div>
-                          <button className="w-full bg-zinc-900 text-white py-3 rounded-xl font-bold hover:bg-zinc-800 transition-all">
+                          <button className="w-full bg-brand-primary text-white py-3 rounded-xl font-bold hover:bg-brand-primary/90 transition-all shadow-lg">
                             Update User
                           </button>
                         </form>
@@ -4979,13 +4958,13 @@ export default function App() {
                   )}
 
                   {editingDriver && (
-                    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                    <div className="fixed inset-0 bg-brand-dark/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
                       <motion.div 
                         initial={{ opacity: 0, scale: 0.9 }}
                         animate={{ opacity: 1, scale: 1 }}
                         className="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden"
                       >
-                        <div className="p-6 border-b border-zinc-100 flex justify-between items-center bg-zinc-900 text-white">
+                        <div className="p-6 border-b border-zinc-100 flex justify-between items-center bg-brand-dark text-white">
                           <h3 className="font-bold text-xl">Edit Driver</h3>
                           <button onClick={() => setEditingDriver(null)} className="p-2 hover:bg-white/10 rounded-full transition-colors">
                             <X className="w-6 h-6" />
@@ -5019,7 +4998,7 @@ export default function App() {
                               onChange={e => setEditingDriver({ ...editingDriver, password: e.target.value })}
                             />
                           </div>
-                          <button className="w-full bg-zinc-900 text-white py-3 rounded-xl font-bold hover:bg-zinc-800 transition-all">
+                          <button className="w-full bg-brand-primary text-white py-3 rounded-xl font-bold hover:bg-brand-primary/90 transition-all shadow-lg">
                             Update Driver
                           </button>
                         </form>
@@ -5034,7 +5013,7 @@ export default function App() {
                         </div>
                         <h2 className="text-2xl font-bold">Unauthorized Access</h2>
                         <p className="text-zinc-500">You do not have permission to view the Admin Dashboard.</p>
-                        <button onClick={() => setView('user')} className="bg-zinc-900 text-white px-6 py-2 rounded-xl font-bold">Return to Home</button>
+                        <button onClick={() => setView('user')} className="bg-brand-primary text-white px-6 py-2 rounded-xl font-bold shadow-lg">Return to Home</button>
                       </div>
                     )
                   )}
@@ -5057,7 +5036,7 @@ export default function App() {
                 >
                   <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-orange-500/10 to-rose-500/10 rounded-full -mr-16 -mt-16 blur-2xl" />
                   <h2 className="text-2xl sm:text-3xl font-black mb-8 flex items-center gap-3">
-                    <div className="p-2 bg-zinc-900 rounded-xl shadow-lg shrink-0">
+                    <div className="p-2 bg-brand-primary rounded-xl shadow-lg shrink-0">
                       <Car className="text-white w-6 h-6" /> 
                     </div>
                     <span className="gradient-text truncate">
@@ -5120,7 +5099,7 @@ export default function App() {
                               type="tel"
                               placeholder="Phone Number (e.g. 9876543210)"
                               required
-                              className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900"
+                              className="w-full px-4 py-3 bg-indigo-50 border border-indigo-100 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-primary"
                               value={loginData.phone}
                               onChange={e => setLoginData({ ...loginData, phone: e.target.value })}
                             />
@@ -5128,7 +5107,7 @@ export default function App() {
                               type="password"
                               placeholder="Password"
                               required
-                              className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900"
+                              className="w-full px-4 py-3 bg-indigo-50 border border-indigo-100 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-primary"
                               value={loginData.password}
                               onChange={e => setLoginData({ ...loginData, password: e.target.value })}
                             />
@@ -5157,7 +5136,7 @@ export default function App() {
                               placeholder="Enter 4-digit PIN"
                               required
                               maxLength={4}
-                              className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900 text-center text-2xl tracking-widest"
+                              className="w-full px-4 py-3 bg-indigo-50 border border-indigo-100 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-primary text-center text-2xl tracking-widest"
                               value={driverPin}
                               onChange={e => setDriverPin(e.target.value)}
                             />
@@ -5175,31 +5154,12 @@ export default function App() {
                           whileHover={{ scale: 1.02 }}
                           whileTap={{ scale: 0.98 }}
                           disabled={isVerifying}
-                          className="w-full bg-zinc-900 text-white py-4 rounded-xl font-bold hover:bg-zinc-800 transition-all disabled:opacity-50"
+                          className="w-full bg-brand-primary text-white py-4 rounded-xl font-bold hover:bg-brand-primary/90 transition-all disabled:opacity-50 shadow-lg"
                         >
                           {isVerifying ? 'Verifying...' : (driverLoginStep === 'pin' ? 'Verify PIN' : (driverAuthMode === 'login' ? 'Login' : 'Register'))}
                         </motion.button>
                       </form>
 
-                      <div className="mt-6 space-y-4">
-                          <div className="relative">
-                            <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-zinc-200"></div></div>
-                            <div className="relative flex justify-center text-xs uppercase"><span className="bg-white px-2 text-zinc-400 font-bold">Or continue with</span></div>
-                          </div>
-                          
-                          <button
-                            onClick={() => handleGoogleLogin('driver')}
-                            className="w-full flex items-center justify-center gap-3 px-4 py-3 bg-white border border-zinc-200 rounded-xl font-bold hover:bg-zinc-50 transition-all shadow-sm"
-                          >
-                            <svg className="w-5 h-5" viewBox="0 0 24 24">
-                              <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-                              <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-                              <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/>
-                              <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
-                            </svg>
-                            Google
-                          </button>
-                        </div>
                         <div className="mt-6 text-center space-y-2">
                           <button 
                             onClick={() => {
@@ -5290,48 +5250,53 @@ export default function App() {
                           </button>
                         </motion.div>
                       ) : (
-                  <div className="space-y-8">
+                  <div className="space-y-6">
+                    <div className="text-center space-y-2 mb-6">
+                      <h1 className="text-2xl sm:text-3xl font-black tracking-tighter">
+                        Welcome, <span className="gradient-text">{(user.name || user.username || 'Driver').split(' ')[0]}!</span>
+                      </h1>
+                      <p className="text-zinc-500 text-sm font-medium">Ready to hit the road?</p>
+                    </div>
                     <motion.div 
                       initial={{ scale: 0.9, opacity: 0 }}
                       animate={{ scale: 1, opacity: 1 }}
-                      className="bg-zinc-900 text-white p-10 rounded-[2.5rem] relative overflow-hidden shadow-2xl"
+                      className="bg-brand-dark text-white p-6 rounded-3xl relative overflow-hidden shadow-2xl"
                     >
                       <div className="absolute top-0 right-0 w-64 h-64 bg-gradient-to-br from-emerald-500/20 to-transparent rounded-full -mr-32 -mt-32 blur-3xl" />
                       <div className="relative z-10">
-                        <p className="text-zinc-400 font-bold uppercase tracking-widest text-xs mb-2">Total Earnings</p>
-                        <h2 className="text-6xl font-black mb-4">₹{driverWallet.balance}</h2>
+                        <p className="text-zinc-400 font-bold uppercase tracking-widest text-[10px] mb-1">Total Earnings</p>
+                        <h2 className="text-3xl font-black mb-3">₹{driverWallet.balance}</h2>
                         
                         {(user.free_rides || 0) > 0 && (
-                          <div className="mb-8 flex items-center gap-2 bg-emerald-500/20 w-fit px-4 py-2 rounded-full border border-emerald-500/30">
-                            <Zap className="w-4 h-4 text-emerald-400" />
-                            <span className="text-xs font-bold">
+                          <div className="mb-4 flex items-center gap-2 bg-emerald-500/20 w-fit px-3 py-1.5 rounded-full border border-emerald-500/30">
+                            <Zap className="w-3 h-3 text-emerald-400" />
+                            <span className="text-[10px] font-bold">
                               {user.free_rides} Free Rides Left 
                             </span>
                           </div>
                         )}
                         
-                        <div className="flex flex-wrap gap-3">
+                        <div className="flex flex-wrap gap-2">
                         <motion.button 
                           whileHover={{ scale: 1.05 }}
                           whileTap={{ scale: 0.95 }}
                           onClick={handleRequestWithdrawal}
-                          className="bg-white text-zinc-900 px-6 py-3 rounded-xl font-bold hover:bg-zinc-100 transition-all flex items-center gap-2 shadow-lg relative overflow-hidden group"
+                          className="bg-white text-zinc-900 px-4 py-2 rounded-xl font-bold hover:bg-zinc-100 transition-all flex items-center gap-2 shadow-lg relative overflow-hidden group text-sm"
                         >
                           <div className="absolute inset-0 shimmer opacity-0 group-hover:opacity-100 transition-opacity" />
-                          <CreditCard className="w-5 h-5" /> Withdraw to Bank
+                          <CreditCard className="w-4 h-4" /> Withdraw
                         </motion.button>
                         <motion.button 
                           whileHover={{ scale: 1.05 }}
                           whileTap={{ scale: 0.95 }}
                           onClick={() => setIsRechargeModalOpen(true)}
-                          className="bg-emerald-500 text-white px-6 py-3 rounded-xl font-bold hover:bg-emerald-600 transition-all flex items-center gap-2 shadow-lg"
+                          className="bg-emerald-500 text-white px-4 py-2 rounded-xl font-bold hover:bg-emerald-600 transition-all flex items-center gap-2 shadow-lg text-sm"
                         >
-                          <PlusCircle className="w-5 h-5" /> Recharge Wallet
+                          <PlusCircle className="w-4 h-4" /> Recharge
                         </motion.button>
-                        {/* Alert enable option removed as per user request */}
                       </div>
                     </div>
-                    <Wallet className="absolute -right-8 -bottom-8 w-48 h-48 text-white/5" />
+                    <Wallet className="absolute -right-4 -bottom-4 w-24 h-24 text-white/5" />
                   </motion.div>
 
                   {/* Recent Completed Rides removed as it is now in the All Rides tabbed section */}
@@ -5369,50 +5334,47 @@ export default function App() {
                       
                       <div className="flex p-1 bg-zinc-100 rounded-xl border border-zinc-200">
                         <button
-                          onClick={() => setDriverRidesTab('available')}
+                          onClick={() => setDriverRidesTab('all')}
                           className={`px-4 py-2 text-xs font-black rounded-lg transition-all ${
-                            driverRidesTab === 'available' ? 'bg-white shadow-sm text-zinc-900' : 'text-zinc-500 hover:text-zinc-700'
+                            driverRidesTab === 'all' ? 'bg-white shadow-sm text-zinc-900' : 'text-zinc-500 hover:text-zinc-700'
                           }`}
                         >
-                          Available
-                        </button>
-                        <button
-                          onClick={() => setDriverRidesTab('accepted')}
-                          className={`px-4 py-2 text-xs font-black rounded-lg transition-all ${
-                            driverRidesTab === 'accepted' ? 'bg-white shadow-sm text-zinc-900' : 'text-zinc-500 hover:text-zinc-700'
-                          }`}
-                        >
-                          Accepted
-                        </button>
-                        <button
-                          onClick={() => setDriverRidesTab('completed')}
-                          className={`px-4 py-2 text-xs font-black rounded-lg transition-all ${
-                            driverRidesTab === 'completed' ? 'bg-white shadow-sm text-zinc-900' : 'text-zinc-500 hover:text-zinc-700'
-                          }`}
-                        >
-                          History
+                          All Rides
                         </button>
                       </div>
                     </div>
 
                     {availableRides.filter(ride => {
+                      if (driverRidesTab === 'all') return true;
                       if (driverRidesTab === 'available') return ride.status === 'pending';
                       if (driverRidesTab === 'accepted') return ride.status === 'accepted' || ride.status === 'ongoing';
                       if (driverRidesTab === 'completed') return ride.status === 'completed' || ride.status === 'cancelled';
                       return false;
-                    }).length === 0 ? (
+                    })
+                    .sort((a, b) => {
+                      if (a.status === 'pending' && b.status !== 'pending') return -1;
+                      if (a.status !== 'pending' && b.status === 'pending') return 1;
+                      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+                    })
+                    .length === 0 ? (
                       <div className="bg-white p-12 rounded-2xl border border-zinc-200 text-center space-y-2">
-                        <p className="text-zinc-500">No {driverRidesTab === 'completed' ? 'history' : driverRidesTab} rides right now.</p>
+                        <p className="text-zinc-500">No {driverRidesTab === 'completed' ? 'history' : driverRidesTab === 'all' ? 'rides' : driverRidesTab} rides right now.</p>
                         <p className="text-sm text-zinc-400">New ride requests will appear here in real-time.</p>
                       </div>
                     ) : (
                       <div className="grid grid-cols-1 gap-4">
                         {availableRides
                           .filter(ride => {
+                            if (driverRidesTab === 'all') return true;
                             if (driverRidesTab === 'available') return ride.status === 'pending';
                             if (driverRidesTab === 'accepted') return ride.status === 'accepted' || ride.status === 'ongoing';
                             if (driverRidesTab === 'completed') return ride.status === 'completed' || ride.status === 'cancelled';
                             return false;
+                          })
+                          .sort((a, b) => {
+                            if (a.status === 'pending' && b.status !== 'pending') return -1;
+                            if (a.status !== 'pending' && b.status === 'pending') return 1;
+                            return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
                           })
                           .map(ride => (
                           <div key={ride.id} className="bg-white p-6 rounded-2xl border border-zinc-200 shadow-sm space-y-4">
@@ -5448,7 +5410,7 @@ export default function App() {
                                 <div className="flex flex-col items-center gap-1">
                                   <div className="w-2 h-2 rounded-full bg-emerald-500" />
                                   <div className="w-0.5 h-4 bg-zinc-100" />
-                                  <div className="w-2 h-2 rounded-full bg-zinc-900" />
+                                  <div className="w-2 h-2 rounded-full bg-brand-primary" />
                                 </div>
                                 <div className="flex-1 space-y-3">
                                   <div>
@@ -5595,7 +5557,7 @@ export default function App() {
                                       <button
                                         onClick={() => handleAcceptRide(ride.id)}
                                         disabled={isActionLoading || !etaInput}
-                                        className="bg-zinc-900 text-white px-6 py-2 rounded-lg text-sm font-bold disabled:opacity-50 hover:bg-zinc-800 transition-colors"
+                                        className="bg-brand-primary text-white px-6 py-2 rounded-lg text-sm font-bold disabled:opacity-50 hover:bg-brand-primary/90 transition-colors shadow-md"
                                       >
                                         {isActionLoading ? '...' : 'Confirm'}
                                       </button>
@@ -5620,7 +5582,7 @@ export default function App() {
                                       repeat: Infinity,
                                       repeatDelay: 2
                                     }}
-                                    className="w-full bg-zinc-900 text-white py-3 rounded-xl font-bold hover:bg-zinc-800 transition-all disabled:opacity-50 shadow-lg shadow-zinc-200"
+                                    className="w-full bg-brand-primary text-white py-3 rounded-xl font-bold hover:bg-brand-primary/90 transition-all disabled:opacity-50 shadow-lg shadow-indigo-100"
                                   >
                                     Accept Ride
                                   </motion.button>
@@ -5674,7 +5636,7 @@ export default function App() {
                                     <button
                                       onClick={() => handleCompleteRide(ride.id)}
                                       disabled={isActionLoading || !otpInput}
-                                      className="bg-zinc-900 text-white px-6 py-2 rounded-lg text-sm font-bold hover:bg-zinc-800 transition-all disabled:opacity-50"
+                                      className="bg-brand-primary text-white px-6 py-2 rounded-lg text-sm font-bold hover:bg-brand-primary/90 transition-all disabled:opacity-50 shadow-md"
                                     >
                                       {isActionLoading ? '...' : 'Complete Trip'}
                                     </button>
@@ -5787,7 +5749,7 @@ export default function App() {
                         </div>
                         <h2 className="text-2xl font-bold">Unauthorized Access</h2>
                         <p className="text-zinc-500">You do not have permission to view the Driver Dashboard.</p>
-                        <button onClick={() => setView('user')} className="bg-zinc-900 text-white px-6 py-2 rounded-xl font-bold">Return to Home</button>
+                        <button onClick={() => setView('user')} className="bg-brand-primary text-white px-6 py-2 rounded-xl font-bold shadow-lg">Return to Home</button>
                       </div>
                     )
                   )}
@@ -5799,7 +5761,7 @@ export default function App() {
       {/* Recharge Modal */}
       <AnimatePresence>
         {isRechargeModalOpen && (
-          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-brand-dark/50 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
             <motion.div 
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
@@ -5865,13 +5827,13 @@ export default function App() {
       {/* Review Modal */}
       <AnimatePresence>
         {reviewModal && (
-          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-brand-dark/50 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
             <motion.div 
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
               className="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden"
             >
-              <div className="p-6 border-b border-zinc-100 flex justify-between items-center bg-zinc-900 text-white">
+              <div className="p-6 border-b border-zinc-100 flex justify-between items-center bg-brand-dark text-white">
                 <div>
                   <h3 className="font-bold text-xl">Rate Your Experience</h3>
                   <p className="text-xs opacity-60">How was your ride with {reviewModal.driverName}?</p>
@@ -5906,7 +5868,7 @@ export default function App() {
                 <button
                   onClick={handleSubmitReview}
                   disabled={isActionLoading}
-                  className="w-full bg-zinc-900 text-white py-4 rounded-2xl font-bold hover:bg-zinc-800 transition-all shadow-xl disabled:opacity-50"
+                  className="w-full bg-brand-primary text-white py-4 rounded-2xl font-bold hover:bg-brand-primary/90 transition-all shadow-xl disabled:opacity-50"
                 >
                   {isActionLoading ? 'Submitting...' : 'Submit Review'}
                 </button>
@@ -5919,7 +5881,7 @@ export default function App() {
       {/* Complaint Modal */}
       <AnimatePresence>
         {complaintModal && (
-          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-brand-dark/50 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
             <motion.div 
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
@@ -5963,14 +5925,14 @@ export default function App() {
       </AnimatePresence>
       <AnimatePresence>
         {isManualRideModalOpen && (
-          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-brand-dark/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
             <motion.div 
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.9 }}
               className="bg-white w-full max-w-lg rounded-3xl shadow-2xl overflow-hidden"
             >
-              <div className="p-6 border-b border-zinc-100 flex justify-between items-center bg-zinc-900 text-white">
+              <div className="p-6 border-b border-zinc-100 flex justify-between items-center bg-brand-dark text-white">
                 <div>
                   <h3 className="font-bold text-xl tracking-tight">Manual Ride Entry</h3>
                   <p className="text-xs opacity-60">Add a ride record directly to the database</p>
@@ -6095,7 +6057,7 @@ export default function App() {
                 <button 
                   onClick={handleManualAddRide}
                   disabled={isActionLoading}
-                  className="flex-1 px-6 py-3 bg-zinc-900 text-white rounded-2xl text-sm font-bold hover:bg-zinc-800 transition-all shadow-lg disabled:opacity-50"
+                  className="flex-1 px-6 py-3 bg-brand-primary text-white rounded-2xl text-sm font-bold hover:bg-brand-primary/90 transition-all shadow-lg disabled:opacity-50"
                 >
                   {isActionLoading ? 'Adding...' : 'Add Ride Record'}
                 </button>
@@ -6105,14 +6067,14 @@ export default function App() {
         )}
 
         {isForgotPasswordModalOpen && (
-          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-brand-dark/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
             <motion.div 
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.9 }}
               className="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden"
             >
-              <div className="p-6 border-b border-zinc-100 flex justify-between items-center bg-zinc-900 text-white">
+              <div className="p-6 border-b border-zinc-100 flex justify-between items-center bg-brand-dark text-white">
                 <div>
                   <h3 className="font-bold text-xl tracking-tight">Reset Password</h3>
                   <p className="text-xs opacity-60">Reset your {forgotPasswordType} account password</p>
@@ -6165,7 +6127,7 @@ export default function App() {
                 <button 
                   onClick={handleForgotPassword}
                   disabled={isActionLoading}
-                  className="flex-1 px-6 py-3 bg-zinc-900 text-white rounded-2xl text-sm font-bold hover:bg-zinc-800 transition-all shadow-lg disabled:opacity-50"
+                  className="flex-1 px-6 py-3 bg-brand-primary text-white rounded-2xl text-sm font-bold hover:bg-brand-primary/90 transition-all shadow-lg disabled:opacity-50"
                 >
                   {isActionLoading ? 'Resetting...' : 'Update Password'}
                 </button>
@@ -6175,14 +6137,14 @@ export default function App() {
         )}
 
         {isEditingNotificationModalOpen && editingNotification && (
-          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-brand-dark/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
             <motion.div 
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.9 }}
               className="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden"
             >
-              <div className="p-6 border-b border-zinc-100 flex justify-between items-center bg-zinc-900 text-white">
+              <div className="p-6 border-b border-zinc-100 flex justify-between items-center bg-brand-dark text-white">
                 <div>
                   <h3 className="font-bold text-xl tracking-tight">Edit Notification</h3>
                   <p className="text-xs opacity-60">Update notification message or target</p>
@@ -6255,7 +6217,7 @@ export default function App() {
                 <button 
                   onClick={handleUpdateNotification}
                   disabled={isActionLoading}
-                  className="flex-1 px-6 py-3 bg-zinc-900 text-white rounded-2xl text-sm font-bold hover:bg-zinc-800 transition-all shadow-lg disabled:opacity-50"
+                  className="flex-1 px-6 py-3 bg-brand-primary text-white rounded-2xl text-sm font-bold hover:bg-brand-primary/90 transition-all shadow-lg disabled:opacity-50"
                 >
                   {isActionLoading ? 'Updating...' : 'Save Changes'}
                 </button>
@@ -6291,7 +6253,7 @@ export default function App() {
       {/* Confirm Modal */}
       <AnimatePresence>
         {confirmModal && (
-          <div className="fixed inset-0 z-[150] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="fixed inset-0 z-[150] flex items-center justify-center p-4 bg-brand-dark/60 backdrop-blur-sm">
             <motion.div
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
@@ -6315,7 +6277,7 @@ export default function App() {
                       confirmModal.onConfirm();
                       setConfirmModal(null);
                     }}
-                    className="flex-1 py-3 rounded-xl font-bold text-white bg-zinc-900 hover:bg-zinc-800 transition-colors shadow-lg shadow-zinc-200"
+                    className="flex-1 py-3 rounded-xl font-bold text-white bg-brand-primary hover:bg-brand-primary/90 transition-colors shadow-lg shadow-indigo-100"
                   >
                     Confirm
                   </button>
@@ -6329,7 +6291,7 @@ export default function App() {
       {/* Notification Modal */}
       <AnimatePresence>
         {activeNotification && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-brand-dark/60 backdrop-blur-sm">
             <motion.div
               initial={{ scale: 0.9, opacity: 0, y: 20 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
@@ -6337,7 +6299,7 @@ export default function App() {
               className="bg-white w-full max-w-md rounded-3xl overflow-hidden shadow-2xl border border-zinc-200"
             >
               <div className="p-8 text-center space-y-6">
-                <div className="w-20 h-20 bg-zinc-900 rounded-full flex items-center justify-center mx-auto shadow-lg shadow-zinc-200">
+                <div className="w-20 h-20 bg-brand-primary rounded-full flex items-center justify-center mx-auto shadow-lg shadow-indigo-100">
                   <Bell className="w-10 h-10 text-white" />
                 </div>
                 
@@ -6352,7 +6314,7 @@ export default function App() {
 
                 <button
                   onClick={() => dismissNotification(activeNotification.id)}
-                  className="w-full bg-zinc-900 text-white py-4 rounded-2xl font-bold hover:bg-zinc-800 transition-all shadow-lg shadow-zinc-200 active:scale-[0.98]"
+                  className="w-full bg-brand-primary text-white py-4 rounded-2xl font-bold hover:bg-brand-primary/90 transition-all shadow-lg shadow-indigo-100 active:scale-[0.98]"
                 >
                   Got it, thanks!
                 </button>

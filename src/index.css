@@ -6,9 +6,10 @@
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
   
-  --color-brand-primary: #FF3D00;
-  --color-brand-secondary: #2979FF;
-  --color-brand-accent: #00E676;
+  --color-brand-primary: #4F46E5; /* Indigo 600 */
+  --color-brand-secondary: #F43F5E; /* Rose 500 */
+  --color-brand-accent: #10B981; /* Emerald 500 */
+  --color-brand-dark: #1E1B4B; /* Indigo 950 */
   
   --shadow-3d: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04), inset 0 1px 0 0 rgba(255, 255, 255, 0.1);
   --shadow-3d-hover: 0 30px 35px -5px rgba(0, 0, 0, 0.15), 0 15px 15px -5px rgba(0, 0, 0, 0.06), inset 0 1px 0 0 rgba(255, 255, 255, 0.2);
