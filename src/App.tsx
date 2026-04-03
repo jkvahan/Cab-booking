@@ -31,8 +31,7 @@ import {
   Trash2,
   Edit2,
   PlusCircle,
-  Zap,
-  XCircle
+  Zap
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -641,8 +640,8 @@ export default function App() {
   const [forwardToAdminId, setForwardToAdminId] = useState<string>('');
 
   // Driver Data
-  const [driverRidesTab, setDriverRidesTab] = useState<'available' | 'accepted' | 'completed'>('available');
   const [availableRides, setAvailableRides] = useState<Ride[]>([]);
+  const [completedRides, setCompletedRides] = useState<Ride[]>([]);
   const [driverWallet, setDriverWallet] = useState({ balance: 0, transactions: [] });
   const [driverWithdrawals, setDriverWithdrawals] = useState<any[]>([]);
   const [otpInput, setOtpInput] = useState('');
@@ -5334,7 +5333,105 @@ export default function App() {
                     <Wallet className="absolute -right-8 -bottom-8 w-48 h-48 text-white/5" />
                   </motion.div>
 
-                  {/* Recent Completed Rides removed as it is now in the All Rides tabbed section */}
+                  {completedRides.length > 0 && (
+                    <div className="bg-white p-6 rounded-2xl border border-zinc-200 shadow-sm space-y-4">
+                      <h3 className="font-bold flex items-center gap-2">
+                        <CheckCircle2 className="w-5 h-5 text-emerald-500" /> Recent Completed Rides
+                      </h3>
+                      <div className="space-y-3">
+                        {completedRides.map(ride => (
+                          <React.Fragment key={ride.id}>
+                            <div className="p-4 bg-zinc-50 rounded-xl border border-zinc-100 flex justify-between items-center">
+                            <div>
+                              <p className="text-sm font-bold">{ride.pickup_location} → {ride.dropoff_location}</p>
+                              <div className="flex items-center gap-2 mt-1">
+                                <p className="text-[10px] text-zinc-400 font-mono">{ride.tracking_id}</p>
+                                {ride.pickup_date && (
+                                  <p className="text-[10px] text-emerald-600 font-bold uppercase">{ride.pickup_date} {ride.pickup_time}</p>
+                                )}
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <p className="font-bold text-emerald-600">₹{ride.fare}</p>
+                              {ride.vehicle_type && (
+                                <p className="text-[10px] font-bold text-indigo-600 uppercase">{ride.vehicle_type}</p>
+                              )}
+                              <span className="text-[10px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded font-bold uppercase">Completed</span>
+                            </div>
+                          </div>
+                          {ride.complaint && ride.complaint_forwarded_to_driver && (
+                            <div className="mt-2 p-3 bg-rose-50 border border-rose-100 rounded-xl space-y-2">
+                              <div className="flex items-center justify-between text-rose-600">
+                                <div className="flex items-center gap-2">
+                                  <AlertCircle className="w-4 h-4" />
+                                  <p className="text-xs font-bold uppercase">Complaint Received</p>
+                                </div>
+                                <span className={`text-[8px] font-bold uppercase ${ride.complaint_status === 'resolved' ? 'text-emerald-600' : 'text-rose-500'}`}>
+                                  {ride.complaint_status || 'pending'}
+                                </span>
+                              </div>
+                              <p className="text-sm text-rose-700 italic">"{ride.complaint}"</p>
+                              {ride.complaint_driver_reply && (
+                                <div className="pt-2 border-t border-rose-100">
+                                  <p className="text-[10px] font-bold text-indigo-600 uppercase">Admin Message for You:</p>
+                                  <p className="text-xs text-indigo-700 italic">{ride.complaint_driver_reply}</p>
+                                </div>
+                              )}
+                              {ride.complaint_driver_response && (
+                                <div className="pt-2 border-t border-rose-100">
+                                  <p className="text-[10px] font-bold text-emerald-600 uppercase">Your Response:</p>
+                                  <p className="text-xs text-emerald-700 italic">{ride.complaint_driver_response}</p>
+                                </div>
+                              )}
+                              {!ride.complaint_driver_response && (
+                                <div className="pt-2 border-t border-rose-100 space-y-2">
+                                  <textarea
+                                    placeholder="Write your response to this complaint..."
+                                    className="w-full p-2 text-xs border border-rose-200 rounded-lg focus:ring-1 focus:ring-rose-500 outline-none"
+                                    rows={2}
+                                    id={`driver-response-${ride.id}`}
+                                  />
+                                  <button
+                                    onClick={async () => {
+                                      const responseInput = document.getElementById(`driver-response-${ride.id}`) as HTMLTextAreaElement;
+                                      const response = responseInput?.value;
+                                      if (!response?.trim()) {
+                                        setToast({ message: "Please enter a response", type: 'error' });
+                                        return;
+                                      }
+                                      setIsActionLoading(true);
+                                      try {
+                                        await updateDoc(doc(db, 'rides', ride.id), {
+                                          complaint_driver_response: response,
+                                          complaint_status: 'resolved' // Mark as resolved when driver responds? Or keep as forwarded?
+                                        });
+                                        setToast({ message: "Response sent successfully", type: 'success' });
+                                      } catch (err: any) {
+                                        handleFirestoreError(err, OperationType.UPDATE, `rides/${ride.id}`);
+                                      } finally {
+                                        setIsActionLoading(false);
+                                      }
+                                    }}
+                                    disabled={isActionLoading}
+                                    className="w-full bg-rose-600 text-white py-1.5 rounded-lg text-[10px] font-bold hover:bg-rose-700 transition-colors disabled:opacity-50"
+                                  >
+                                    {isActionLoading ? 'Sending...' : 'Send Response'}
+                                  </button>
+                                </div>
+                              )}
+                              {ride.complaint_reply && !ride.complaint_driver_reply && (
+                                <div className="pt-2 border-t border-rose-100">
+                                  <p className="text-[10px] font-bold text-emerald-600 uppercase">Admin Reply:</p>
+                                  <p className="text-xs text-emerald-700 italic">{ride.complaint_reply}</p>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </React.Fragment>
+                      ))}
+                      </div>
+                    </div>
+                  )}
 
                   {driverWithdrawals.length > 0 && (
                     <div className="bg-white p-6 rounded-2xl border border-zinc-200 shadow-sm space-y-4">
@@ -5361,59 +5458,21 @@ export default function App() {
                     </div>
                   )}
 
-                  <div className="space-y-6">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                      <h3 className="font-bold text-2xl flex items-center gap-2">
-                        <Clock className="w-6 h-6 text-zinc-900" /> All Rides
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <h3 className="font-bold text-xl flex items-center gap-2">
+                        <Clock className="w-5 h-5" /> Available Rides
                       </h3>
-                      
-                      <div className="flex p-1 bg-zinc-100 rounded-xl border border-zinc-200">
-                        <button
-                          onClick={() => setDriverRidesTab('available')}
-                          className={`px-4 py-2 text-xs font-black rounded-lg transition-all ${
-                            driverRidesTab === 'available' ? 'bg-white shadow-sm text-zinc-900' : 'text-zinc-500 hover:text-zinc-700'
-                          }`}
-                        >
-                          Available
-                        </button>
-                        <button
-                          onClick={() => setDriverRidesTab('accepted')}
-                          className={`px-4 py-2 text-xs font-black rounded-lg transition-all ${
-                            driverRidesTab === 'accepted' ? 'bg-white shadow-sm text-zinc-900' : 'text-zinc-500 hover:text-zinc-700'
-                          }`}
-                        >
-                          Accepted
-                        </button>
-                        <button
-                          onClick={() => setDriverRidesTab('completed')}
-                          className={`px-4 py-2 text-xs font-black rounded-lg transition-all ${
-                            driverRidesTab === 'completed' ? 'bg-white shadow-sm text-zinc-900' : 'text-zinc-500 hover:text-zinc-700'
-                          }`}
-                        >
-                          History
-                        </button>
-                      </div>
                     </div>
-
-                    {availableRides.filter(ride => {
-                      if (driverRidesTab === 'available') return ride.status === 'pending';
-                      if (driverRidesTab === 'accepted') return ride.status === 'accepted' || ride.status === 'ongoing';
-                      if (driverRidesTab === 'completed') return ride.status === 'completed' || ride.status === 'cancelled';
-                      return false;
-                    }).length === 0 ? (
+                    {availableRides.filter(ride => ride.status === 'pending').length === 0 ? (
                       <div className="bg-white p-12 rounded-2xl border border-zinc-200 text-center space-y-2">
-                        <p className="text-zinc-500">No {driverRidesTab === 'completed' ? 'history' : driverRidesTab} rides right now.</p>
+                        <p className="text-zinc-500">No available rides right now.</p>
                         <p className="text-sm text-zinc-400">New ride requests will appear here in real-time.</p>
                       </div>
                     ) : (
                       <div className="grid grid-cols-1 gap-4">
                         {availableRides
-                          .filter(ride => {
-                            if (driverRidesTab === 'available') return ride.status === 'pending';
-                            if (driverRidesTab === 'accepted') return ride.status === 'accepted' || ride.status === 'ongoing';
-                            if (driverRidesTab === 'completed') return ride.status === 'completed' || ride.status === 'cancelled';
-                            return false;
-                          })
+                          .filter(ride => ride.status === 'pending')
                           .map(ride => (
                           <div key={ride.id} className="bg-white p-6 rounded-2xl border border-zinc-200 shadow-sm space-y-4">
                             <div className="flex justify-between items-center">
@@ -5465,13 +5524,9 @@ export default function App() {
 
                             <div className="flex justify-between items-center pt-2 border-t border-zinc-50">
                               <div className="flex items-center gap-2">
-                                <span className={`px-2 py-1 rounded text-[10px] font-bold uppercase flex items-center gap-1 ${getStatusColor(ride.status)}`}>
-                                  {ride.status === 'pending' && <Clock className="w-2.5 h-2.5" />}
-                                  {(ride.status === 'accepted' || ride.status === 'ongoing') && <Navigation className="w-2.5 h-2.5" />}
-                                  {ride.status === 'cancelled' && <XCircle className="w-2.5 h-2.5" />}
-                                  {ride.status === 'completed' && <CheckCircle2 className="w-2.5 h-2.5" />}
+                                <span className={`px-2 py-1 rounded text-[10px] font-bold uppercase ${getStatusColor(ride.status)}`}>
                                   {getStatusLabel(ride.status, ride.advance_paid)}
-                                  {ride.driver_id && ride.driver_id !== user.id && ride.driver_name && ` (by ${ride.driver_name})`}
+                                  {ride.status === 'accepted' && ride.driver_id !== user.id && ride.driver_name && ` (by ${ride.driver_name})`}
                                 </span>
                                 {ride.advance_paid && (
                                   <span className="px-2 py-1 rounded text-[10px] font-bold uppercase bg-emerald-100 text-emerald-700 flex items-center gap-1">
@@ -5507,74 +5562,6 @@ export default function App() {
                                 >
                                   Call: {ride.user_phone}
                                 </a>
-                              </div>
-                            )}
-
-                            {ride.status === 'completed' && (
-                              <div className="space-y-3">
-                                {ride.complaint && ride.complaint_forwarded_to_driver && (
-                                  <div className="p-3 bg-rose-50 border border-rose-100 rounded-xl space-y-2">
-                                    <div className="flex items-center justify-between text-rose-600">
-                                      <div className="flex items-center gap-2">
-                                        <AlertCircle className="w-4 h-4" />
-                                        <p className="text-xs font-bold uppercase">Complaint Received</p>
-                                      </div>
-                                      <span className={`text-[8px] font-bold uppercase ${ride.complaint_status === 'resolved' ? 'text-emerald-600' : 'text-rose-500'}`}>
-                                        {ride.complaint_status || 'pending'}
-                                      </span>
-                                    </div>
-                                    <p className="text-sm text-rose-700 italic">"{ride.complaint}"</p>
-                                    {!ride.complaint_driver_response && (
-                                      <div className="pt-2 border-t border-rose-100 space-y-2">
-                                        <textarea
-                                          placeholder="Write your response to this complaint..."
-                                          className="w-full p-2 text-xs border border-zinc-200 rounded-lg focus:ring-1 focus:ring-rose-500 outline-none"
-                                          rows={2}
-                                          id={`driver-response-${ride.id}`}
-                                        />
-                                        <button
-                                          onClick={async () => {
-                                            const responseInput = document.getElementById(`driver-response-${ride.id}`) as HTMLTextAreaElement;
-                                            const response = responseInput?.value;
-                                            if (!response?.trim()) {
-                                              setToast({ message: "Please enter a response", type: 'error' });
-                                              return;
-                                            }
-                                            setIsActionLoading(true);
-                                            try {
-                                              await updateDoc(doc(db, 'rides', ride.id), {
-                                                complaint_driver_response: response,
-                                                complaint_status: 'resolved'
-                                              });
-                                              setToast({ message: "Response sent successfully", type: 'success' });
-                                            } catch (err: any) {
-                                              handleFirestoreError(err, OperationType.UPDATE, `rides/${ride.id}`);
-                                            } finally {
-                                              setIsActionLoading(false);
-                                            }
-                                          }}
-                                          disabled={isActionLoading}
-                                          className="w-full bg-rose-600 text-white py-1.5 rounded-lg text-[10px] font-bold hover:bg-rose-700 transition-colors disabled:opacity-50"
-                                        >
-                                          {isActionLoading ? 'Sending...' : 'Send Response'}
-                                        </button>
-                                      </div>
-                                    )}
-                                    {ride.complaint_driver_response && (
-                                      <div className="pt-2 border-t border-rose-100">
-                                        <p className="text-[10px] font-bold text-emerald-600 uppercase">Your Response:</p>
-                                        <p className="text-xs text-emerald-700 italic">{ride.complaint_driver_response}</p>
-                                      </div>
-                                    )}
-                                  </div>
-                                )}
-                                {ride.rating && (
-                                  <div className="px-4 py-2 bg-amber-50 rounded-lg border border-amber-100 flex items-center gap-2">
-                                    <Star className="w-3 h-3 text-amber-500 fill-amber-500" />
-                                    <span className="text-[10px] font-bold text-amber-700">User Rated: {ride.rating} Stars</span>
-                                    {ride.review && <span className="text-[10px] text-amber-600 italic">"{ride.review}"</span>}
-                                  </div>
-                                )}
                               </div>
                             )}
 
