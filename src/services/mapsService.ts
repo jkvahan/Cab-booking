@@ -1,7 +1,10 @@
 import { getRealDistance } from './geminiService';
 
 export const VEHICLE_RATES = {
-  Auto: { base: 30, perKm: 12, description: "Affordable 3-wheeler for quick city trips", seats: 3 }
+  Mini: { base: 40, perKm: 14, description: "Compact AC cabs for city travel", seats: 4 },
+  Sedan: { base: 50, perKm: 16, description: "Comfortable sedans with extra legroom", seats: 4 },
+  SUV: { base: 70, perKm: 20, description: "Spacious SUVs for families and groups", seats: 6 },
+  Traveller: { base: 120, perKm: 28, description: "Large 12-seater for groups and tours", seats: 12 }
 };
 
 export interface FareOption {

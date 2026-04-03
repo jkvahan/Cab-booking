@@ -751,6 +751,7 @@ export default function App() {
     let unsubscribeDriverData: () => void;
     let unsubscribeDriverTransactions: () => void;
     let unsubscribeAdmins: () => void;
+    let unsubscribeActivities: () => void;
 
     // Notification Listener for all views
     let notifQuery;
@@ -921,7 +922,6 @@ export default function App() {
         setAdminUsers(users);
       }, (err) => handleFirestoreError(err, OperationType.LIST, 'users'));
 
-      let unsubscribeActivities: (() => void) | undefined;
       // Only owner can see other admins
       if (user.role === 'owner') {
         unsubscribeAdmins = onSnapshot(collection(db, 'admins'), (snapshot) => {
@@ -1165,6 +1165,7 @@ export default function App() {
         pin: editingAdmin.pin,
         permissions: editingAdmin.permissions
       });
+      await logActivity('Update Admin', `Admin: ${editingAdmin.username}`);
       setToast({ message: "Admin Updated", type: 'success' });
       setEditingAdmin(null);
     } catch (err) {
@@ -1182,6 +1183,7 @@ export default function App() {
         phone: editingUser.phone,
         password: editingUser.password
       });
+      await logActivity('Update User', `User: ${editingUser.name} (${editingUser.phone})`);
       setToast({ message: "User Updated", type: 'success' });
       setEditingUser(null);
     } catch (err) {
@@ -1233,6 +1235,7 @@ export default function App() {
       onConfirm: async () => {
         try {
           await deleteDoc(doc(db, 'withdrawal_requests', requestId));
+          await logActivity('Delete Withdrawal Request', `Request ID: ${requestId}`);
           setToast({ message: 'Withdrawal request deleted successfully', type: 'success' });
         } catch (err) {
           handleFirestoreError(err, OperationType.DELETE, `withdrawal_requests/${requestId}`);
@@ -1272,6 +1275,7 @@ export default function App() {
         phone: editingDriver.phone,
         password: editingDriver.password
       });
+      await logActivity('Update Driver', `Driver: ${editingDriver.name} (${editingDriver.phone})`);
       setToast({ message: "Driver Updated", type: 'success' });
       setEditingDriver(null);
     } catch (err) {
@@ -1374,6 +1378,8 @@ export default function App() {
         const newBalance = type === 'credit' ? currentBalance + amount : currentBalance - amount;
         await updateDoc(driverRef, { wallet_balance: newBalance });
         
+        await logActivity('Wallet Adjust', `${type === 'credit' ? 'Credit' : 'Debit'} ₹${amount} to Driver ID: ${driverId}. Reason: ${reason}`);
+
         await addDoc(collection(db, 'transactions'), {
           driver_id: driverId,
           amount,
@@ -1397,6 +1403,7 @@ export default function App() {
         setIsActionLoading(true);
         try {
           await deleteDoc(doc(db, 'rides', rideId));
+          await logActivity('Delete Ride', `Ride ID: ${rideId}`);
           setToast({ message: "Ride record deleted successfully", type: 'success' });
         } catch (err) {
           handleFirestoreError(err, OperationType.DELETE, `rides/${rideId}`);
@@ -1413,6 +1420,7 @@ export default function App() {
       await updateDoc(rideRef, {
         complaint_status: 'resolved'
       });
+      await logActivity('Resolve Complaint', `Ride ID: ${rideId}`);
       setToast({ message: "Complaint marked as resolved", type: 'success' });
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `rides/${rideId}`);
@@ -1455,6 +1463,7 @@ export default function App() {
       }
 
       await updateDoc(rideRef, updateData);
+      await logActivity('Complaint Reply', `Ride ID: ${complaintReplyModal.rideId}, Action: ${shouldResolve ? 'Resolved' : 'Forwarded'}`);
 
       // If forwarded to another admin, send a notification
       if (forwardToAdminId) {
@@ -1625,6 +1634,7 @@ export default function App() {
       for (const rideId of selectedRides) {
         await deleteDoc(doc(db, 'rides', rideId));
       }
+      await logActivity('Bulk Delete Rides', `Deleted ${selectedRides.length} rides`);
       setToast({ message: `${selectedRides.length} rides deleted`, type: 'success' });
       setSelectedRides([]);
     } catch (err) {
@@ -1645,6 +1655,7 @@ export default function App() {
       for (const txId of selectedTransactions) {
         await deleteDoc(doc(db, 'transactions', txId));
       }
+      await logActivity('Bulk Delete Transactions', `Deleted ${selectedTransactions.length} transactions`);
       setToast({ message: `${selectedTransactions.length} transactions deleted`, type: 'success' });
       setSelectedTransactions([]);
       if (selectedDriverTransactions) {
@@ -1665,6 +1676,7 @@ export default function App() {
 
     try {
       await deleteDoc(doc(db, 'notifications', notifId));
+      await logActivity('Delete Notification', `Notification ID: ${notifId}`);
       setToast({ message: "Notification deleted", type: 'success' });
     } catch (err) {
       handleFirestoreError(err, OperationType.DELETE, `notifications/${notifId}`);
@@ -1805,6 +1817,7 @@ export default function App() {
           }
         }
         await updateDoc(withdrawalRef, { status: action, processed_at: new Date().toISOString() });
+        await logActivity(`${action === 'approved' ? 'Approve' : 'Reject'} Withdrawal`, `Request ID: ${id}`);
       }
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `withdrawal_requests/${id}`);
@@ -2810,7 +2823,7 @@ export default function App() {
         <div className="absolute top-[30%] right-[10%] w-[30%] h-[30%] bg-rose-500/10 rounded-full blur-[120px] animate-pulse" style={{ animationDelay: '4s' }} />
       </div>
 
-      <main className={`${user ? 'pt-32' : 'pt-28'} pb-12 px-3 sm:px-4 max-w-4xl mx-auto`}>
+      <main className={`${user ? 'pt-36' : 'pt-32'} pb-12 px-3 sm:px-4 max-w-4xl mx-auto`}>
       <AnimatePresence mode="wait">
           {/* USER VIEW */}
           {view === 'user' && (
@@ -2987,7 +3000,7 @@ export default function App() {
                       animate={{ y: 0, opacity: 1 }}
                       className="text-3xl sm:text-4xl font-black tracking-tighter"
                     >
-                      Welcome, <span className="gradient-text">{(user.name || user.username || 'User').split(' ')[0]}!</span>
+                      Welcome, <span className="gradient-text">{user.name || user.username || 'User'}!</span>
                     </motion.h1>
                     <p className="text-zinc-500 font-medium">Ready for your next adventure?</p>
                   </div>
@@ -3140,7 +3153,7 @@ export default function App() {
                             setFareOptions([]);
                           }}
                         >
-                          {[1, 2, 3].map(num => (
+                          {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(num => (
                             <option key={num} value={num}>{num} Passenger{num > 1 ? 's' : ''}</option>
                           ))}
                         </motion.select>
@@ -3662,7 +3675,9 @@ export default function App() {
                         <div className="flex items-center justify-between mb-8">
                           <div className="space-y-1">
                             <h1 className="text-2xl sm:text-3xl font-black tracking-tighter gradient-text">Admin Command Center</h1>
-                            <p className="text-zinc-500 text-sm font-medium">Welcome, <span className="font-bold text-zinc-900">{user.username || user.name || 'Admin'}</span></p>
+                            <p className="text-zinc-500 text-sm font-medium flex items-center gap-2">
+                              Welcome, <span className="font-black gradient-text">{user.username || user.name || 'Admin'}!</span>
+                            </p>
                           </div>
                           <div className="flex items-center gap-2 px-4 py-2 glass rounded-2xl">
                             <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
@@ -3725,61 +3740,50 @@ export default function App() {
                         </div>
 
                         {user.role === 'owner' && (
-                          <div className="bg-brand-dark text-white p-5 rounded-3xl relative overflow-hidden shadow-2xl">
-                            <div className="absolute top-0 right-0 w-64 h-64 bg-emerald-500/10 rounded-full -mr-32 -mt-32 blur-3xl" />
+                          <div className="bg-zinc-900 text-white p-3 rounded-2xl relative overflow-hidden shadow-xl border border-white/10">
+                            <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-500/5 rounded-full -mr-12 -mt-12 blur-2xl" />
                             <div className="relative z-10">
-                              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 mb-4">
-                                <div className="space-y-1">
-                                  <h3 className="text-lg font-black tracking-tight flex items-center gap-2">
-                                    <div className="p-1.5 bg-emerald-500/20 rounded-lg">
-                                      <Settings className="w-4 h-4 text-emerald-400" />
-                                    </div>
-                                    System Health & Memory
+                              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2">
+                                <div className="space-y-0.5">
+                                  <h3 className="text-[10px] font-black tracking-widest uppercase flex items-center gap-1.5 text-zinc-400">
+                                    <Settings className="w-2.5 h-2.5 text-emerald-400" />
+                                    System Health
                                   </h3>
-                                  <p className="text-zinc-400 text-xs max-w-md leading-relaxed">
-                                    Real-time monitoring of database storage and document limits. 
-                                    Free tier (Spark) provides 1GB storage.
-                                  </p>
                                 </div>
-                                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 w-full lg:w-auto">
-                                  <div className="text-center p-3 bg-white/5 rounded-2xl border border-white/10 backdrop-blur-sm">
-                                    <p className="text-[9px] uppercase font-black tracking-widest text-zinc-500 mb-1">Total Rides</p>
-                                    <p className="text-lg font-black">{adminRides.length}</p>
+                                <div className="grid grid-cols-3 gap-1.5 w-full sm:w-auto">
+                                  <div className="text-center p-1.5 bg-white/5 rounded-lg border border-white/10">
+                                    <p className="text-[6px] uppercase font-black tracking-widest text-zinc-500">Rides</p>
+                                    <p className="text-[10px] font-black">{adminRides.length}</p>
                                   </div>
-                                  <div className="text-center p-3 bg-white/5 rounded-2xl border border-white/10 backdrop-blur-sm">
-                                    <p className="text-[9px] uppercase font-black tracking-widest text-zinc-500 mb-1">Total Users</p>
-                                    <p className="text-lg font-black">{adminUsers.length}</p>
+                                  <div className="text-center p-1.5 bg-white/5 rounded-lg border border-white/10">
+                                    <p className="text-[6px] uppercase font-black tracking-widest text-zinc-500">Users</p>
+                                    <p className="text-[10px] font-black">{adminUsers.length}</p>
                                   </div>
-                                  <div className="text-center p-3 bg-white/5 rounded-2xl border border-white/10 backdrop-blur-sm col-span-2 sm:col-span-1">
-                                    <p className="text-[9px] uppercase font-black tracking-widest text-zinc-500 mb-1">Memory Left</p>
-                                    <p className="text-lg font-black text-emerald-400">
-                                      {(100 - Math.min(100, (adminRides.length + adminUsers.length + adminDrivers.length) / 100)).toFixed(1)}%
+                                  <div className="text-center p-1.5 bg-white/5 rounded-lg border border-white/10">
+                                    <p className="text-[6px] uppercase font-black tracking-widest text-zinc-500">Memory</p>
+                                    <p className="text-[10px] font-black text-emerald-400">
+                                      {(100 - Math.min(100, (adminRides.length + adminUsers.length + adminDrivers.length) / 100)).toFixed(0)}%
                                     </p>
                                   </div>
                                 </div>
                               </div>
                               
-                              <div className="space-y-3 bg-white/5 p-4 rounded-2xl border border-white/10">
+                              <div className="space-y-2 bg-white/5 p-3 rounded-xl border border-white/10">
                                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-1">
                                   <div className="flex items-center gap-2">
-                                    <div className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse" />
-                                    <p className="text-[9px] uppercase font-black tracking-widest text-zinc-400">Storage Capacity Utilization</p>
+                                    <div className="w-1 h-1 bg-emerald-400 rounded-full animate-pulse" />
+                                    <p className="text-[8px] uppercase font-black tracking-widest text-zinc-400">Storage Capacity Utilization</p>
                                   </div>
-                                  <p className="text-[9px] font-black text-emerald-400 bg-emerald-400/10 px-1.5 py-0.5 rounded-md">
-                                    {(adminRides.length + adminUsers.length + adminDrivers.length)} / 10,000 Documents (Estimated)
+                                  <p className="text-[8px] font-black text-emerald-400 bg-emerald-400/10 px-1.5 py-0.5 rounded-md">
+                                    {(adminRides.length + adminUsers.length + adminDrivers.length)} / 10,000 Documents
                                   </p>
                                 </div>
-                                <div className="w-full bg-white/5 h-2 rounded-full overflow-hidden border border-white/10 p-0.5">
+                                <div className="w-full bg-white/5 h-1.5 rounded-full overflow-hidden border border-white/10">
                                   <motion.div 
                                     initial={{ width: 0 }}
                                     animate={{ width: `${Math.min(100, (adminRides.length + adminUsers.length + adminDrivers.length) / 100)}%` }}
-                                    className="bg-gradient-to-r from-emerald-500 via-emerald-400 to-teal-400 h-full rounded-full shadow-[0_0_10px_rgba(52,211,153,0.3)]"
+                                    className="bg-gradient-to-r from-emerald-500 via-emerald-400 to-teal-400 h-full rounded-full"
                                   />
-                                </div>
-                                <div className="flex justify-between text-[8px] font-bold text-zinc-500 uppercase tracking-tighter">
-                                  <span>0% Used</span>
-                                  <span>50% Warning</span>
-                                  <span>100% Limit</span>
                                 </div>
                               </div>
                             </div>
@@ -5253,51 +5257,52 @@ export default function App() {
                   <div className="space-y-6">
                     <div className="text-center space-y-2 mb-6">
                       <h1 className="text-2xl sm:text-3xl font-black tracking-tighter">
-                        Welcome, <span className="gradient-text">{(user.name || user.username || 'Driver').split(' ')[0]}!</span>
+                        Welcome, <span className="gradient-text">{user.name || user.username || 'Driver'}!</span>
                       </h1>
                       <p className="text-zinc-500 text-sm font-medium">Ready to hit the road?</p>
                     </div>
                     <motion.div 
-                      initial={{ scale: 0.9, opacity: 0 }}
+                      initial={{ scale: 0.95, opacity: 0 }}
                       animate={{ scale: 1, opacity: 1 }}
-                      className="bg-brand-dark text-white p-6 rounded-3xl relative overflow-hidden shadow-2xl"
+                      className="bg-zinc-900 text-white p-4 rounded-3xl shadow-2xl relative overflow-hidden group border border-white/10 max-w-sm mx-auto"
                     >
-                      <div className="absolute top-0 right-0 w-64 h-64 bg-gradient-to-br from-emerald-500/20 to-transparent rounded-full -mr-32 -mt-32 blur-3xl" />
-                      <div className="relative z-10">
-                        <p className="text-zinc-400 font-bold uppercase tracking-widest text-[10px] mb-1">Total Earnings</p>
-                        <h2 className="text-3xl font-black mb-3">₹{driverWallet.balance}</h2>
+                      <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-brand-primary/20 to-transparent rounded-full -mr-16 -mt-16 blur-2xl group-hover:scale-110 transition-transform" />
+                      
+                      <div className="relative z-10 flex items-center justify-between gap-4">
+                        <div className="shrink-0">
+                          <p className="text-zinc-400 font-black uppercase tracking-widest text-[7px] mb-0.5">Total Earnings</p>
+                          <h2 className="text-lg font-black">₹{driverWallet.balance}</h2>
+                        </div>
                         
-                        {(user.free_rides || 0) > 0 && (
-                          <div className="mb-4 flex items-center gap-2 bg-emerald-500/20 w-fit px-3 py-1.5 rounded-full border border-emerald-500/30">
-                            <Zap className="w-3 h-3 text-emerald-400" />
-                            <span className="text-[10px] font-bold">
-                              {user.free_rides} Free Rides Left 
-                            </span>
-                          </div>
-                        )}
-                        
-                        <div className="flex flex-wrap gap-2">
-                        <motion.button 
-                          whileHover={{ scale: 1.05 }}
-                          whileTap={{ scale: 0.95 }}
-                          onClick={handleRequestWithdrawal}
-                          className="bg-white text-zinc-900 px-4 py-2 rounded-xl font-bold hover:bg-zinc-100 transition-all flex items-center gap-2 shadow-lg relative overflow-hidden group text-sm"
-                        >
-                          <div className="absolute inset-0 shimmer opacity-0 group-hover:opacity-100 transition-opacity" />
-                          <CreditCard className="w-4 h-4" /> Withdraw
-                        </motion.button>
-                        <motion.button 
-                          whileHover={{ scale: 1.05 }}
-                          whileTap={{ scale: 0.95 }}
-                          onClick={() => setIsRechargeModalOpen(true)}
-                          className="bg-emerald-500 text-white px-4 py-2 rounded-xl font-bold hover:bg-emerald-600 transition-all flex items-center gap-2 shadow-lg text-sm"
-                        >
-                          <PlusCircle className="w-4 h-4" /> Recharge
-                        </motion.button>
+                        <div className="flex gap-1.5">
+                          <motion.button 
+                            whileHover={{ scale: 1.05 }}
+                            whileTap={{ scale: 0.95 }}
+                            onClick={handleRequestWithdrawal}
+                            className="bg-white text-zinc-900 px-2.5 py-1 rounded-lg font-black hover:bg-zinc-100 transition-all flex items-center gap-1 shadow-md text-[9px] uppercase tracking-wider"
+                          >
+                            <CreditCard className="w-2.5 h-2.5" /> Withdraw
+                          </motion.button>
+                          <motion.button 
+                            whileHover={{ scale: 1.05 }}
+                            whileTap={{ scale: 0.95 }}
+                            onClick={() => setIsRechargeModalOpen(true)}
+                            className="bg-emerald-500 text-white px-2.5 py-1 rounded-lg font-black hover:bg-emerald-600 transition-all flex items-center gap-1 shadow-md text-[9px] uppercase tracking-wider"
+                          >
+                            <PlusCircle className="w-2.5 h-2.5" /> Recharge
+                          </motion.button>
+                        </div>
                       </div>
-                    </div>
-                    <Wallet className="absolute -right-4 -bottom-4 w-24 h-24 text-white/5" />
-                  </motion.div>
+                      
+                      {(user.free_rides || 0) > 0 && (
+                        <div className="mt-2 flex items-center gap-1 bg-emerald-500/20 w-fit px-2 py-0.5 rounded-full border border-emerald-500/30">
+                          <Zap className="w-2 h-2 text-emerald-400" />
+                          <span className="text-[7px] font-black uppercase tracking-widest">
+                            {user.free_rides} Free Rides Left 
+                          </span>
+                        </div>
+                      )}
+                    </motion.div>
 
                   {/* Recent Completed Rides removed as it is now in the All Rides tabbed section */}
 
