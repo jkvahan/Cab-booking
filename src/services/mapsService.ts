@@ -1,10 +1,18 @@
 import { getRealDistance } from './geminiService';
 
 export const VEHICLE_RATES = {
-  Mini: { base: 40, perKm: 14, description: "Compact AC cabs for city travel", seats: 4 },
-  Sedan: { base: 50, perKm: 16, description: "Comfortable sedans with extra legroom", seats: 4 },
-  SUV: { base: 70, perKm: 20, description: "Spacious SUVs for families and groups", seats: 6 },
-  Traveller: { base: 120, perKm: 28, description: "Large 12-seater for groups and tours", seats: 12 }
+  "Bike": { base: 20, perKm: 6, description: "Quick & affordable bike rides", seats: 1 },
+  "Auto": { base: 30, perKm: 10, description: "Classic Indian auto rickshaw", seats: 3 },
+  "E-Rickshaw": { base: 25, perKm: 8, description: "Eco-friendly short distance travel", seats: 4 },
+  "Mini (Non-AC)": { base: 35, perKm: 12, description: "Budget compact hatchback", seats: 4 },
+  "Mini (AC)": { base: 45, perKm: 14, description: "Comfortable AC hatchback", seats: 4 },
+  "Sedan (Non-AC)": { base: 45, perKm: 14, description: "Spacious non-AC sedan", seats: 4 },
+  "Sedan (AC)": { base: 55, perKm: 16, description: "Premium AC sedan experience", seats: 4 },
+  "SUV (Non-AC)": { base: 60, perKm: 18, description: "Large non-AC vehicle for groups", seats: 6 },
+  "SUV (AC)": { base: 75, perKm: 22, description: "Spacious AC SUV for families", seats: 6 },
+  "Luxury (AC)": { base: 150, perKm: 40, description: "High-end luxury AC cars", seats: 4 },
+  "Tempo (Non-AC)": { base: 100, perKm: 25, description: "12-seater for large groups", seats: 12 },
+  "Tempo (AC)": { base: 150, perKm: 35, description: "Comfortable 12-seater AC tempo", seats: 12 }
 };
 
 export interface FareOption {

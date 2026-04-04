@@ -257,6 +257,7 @@ interface Ride {
   complaint_admin_name?: string;
   advance_paid?: number;
   payment_id?: string;
+  cancellation_reason?: string;
 }
 
 interface AdminUser {
@@ -539,7 +540,9 @@ export default function App() {
     username: '', 
     password: '',
     vehicle_number: '',
-    vehicle_seats: '4'
+    vehicle_type: 'Sedan (AC)',
+    vehicle_seats: '4',
+    vehicle_category: 'commercial'
   });
   const [driverPin, setDriverPin] = useState('');
   const [tempDriverId, setTempDriverId] = useState<string | null>(null);
@@ -1344,7 +1347,11 @@ export default function App() {
       await updateDoc(driverRef, {
         name: editingDriver.name,
         phone: editingDriver.phone,
-        password: editingDriver.password
+        password: editingDriver.password,
+        vehicle_number: editingDriver.vehicle_number,
+        vehicle_type: editingDriver.vehicle_type,
+        vehicle_seats: parseInt(editingDriver.vehicle_seats),
+        vehicle_category: editingDriver.vehicle_category
       });
       await logActivity('Update Driver', `Driver: ${editingDriver.name} (${editingDriver.phone})`);
       setToast({ message: "Driver Updated", type: 'success' });
@@ -2137,7 +2144,9 @@ export default function App() {
         password: loginData.password,
         pin: loginData.pin,
         vehicle_number: loginData.vehicle_number,
+        vehicle_type: loginData.vehicle_type,
         vehicle_seats: parseInt(loginData.vehicle_seats),
+        vehicle_category: loginData.vehicle_category,
         wallet_balance: 0,
         status: 'under verification',
         created_at: new Date().toISOString(),
@@ -2555,6 +2564,13 @@ export default function App() {
         // Check vehicle capacity
         if (user.vehicle_seats && rideData.passengers > user.vehicle_seats) {
           setError(`Your vehicle (${user.vehicle_seats} seats) cannot accommodate ${rideData.passengers} passengers.`);
+          setIsActionLoading(false);
+          return;
+        }
+
+        // Check vehicle type eligibility
+        if (rideData.vehicle_type && user.vehicle_type && rideData.vehicle_type !== user.vehicle_type) {
+          setError(`This ride requires a ${rideData.vehicle_type}. Your vehicle is a ${user.vehicle_type}.`);
           setIsActionLoading(false);
           return;
         }
@@ -3423,6 +3439,12 @@ export default function App() {
                                 )}
                               </div>
                             )}
+                            {ride.status === 'cancelled' && ride.cancellation_reason && (
+                              <div className="p-3 bg-rose-50 border border-rose-100 rounded-xl">
+                                <p className="text-[10px] font-bold text-rose-600 uppercase">Cancellation Reason</p>
+                                <p className="text-xs text-rose-700 italic">"{ride.cancellation_reason}"</p>
+                              </div>
+                            )}
                             {ride.status === 'accepted' && (
                               <div className="bg-emerald-50 border border-emerald-100 p-3 rounded-xl">
                                 <p className="text-xs font-bold text-emerald-600 uppercase">Driver is arriving</p>
@@ -3499,6 +3521,13 @@ export default function App() {
                       {getStatusLabel(trackedRide.status, trackedRide.advance_paid)}
                     </div>
                   </div>
+
+                  {trackedRide.status === 'cancelled' && trackedRide.cancellation_reason && (
+                    <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl">
+                      <p className="text-xs font-bold text-rose-600 uppercase tracking-wider mb-1">Cancellation Reason</p>
+                      <p className="text-sm text-rose-700 italic font-medium">"{trackedRide.cancellation_reason}"</p>
+                    </div>
+                  )}
 
                   {trackedRide.status === 'accepted' && trackedRide.eta && (
                     <div className="bg-blue-50 border border-blue-100 p-4 rounded-xl flex items-center gap-3">
@@ -3940,7 +3969,7 @@ export default function App() {
                                 )}
                               </div>
                               <div className="flex items-center gap-4">
-                                {admin.id !== user.id && (
+                                {user.role === 'owner' && admin.id !== user.id && (
                                   <button 
                                     onClick={() => handleDeleteAdmin(admin.id)}
                                     className="p-2 hover:bg-rose-50 rounded-lg transition-all group"
@@ -3948,7 +3977,7 @@ export default function App() {
                                     <Trash2 className="w-4 h-4 text-zinc-400 group-hover:text-rose-600" />
                                   </button>
                                 )}
-                                {admin.role !== 'owner' && (
+                                {user.role === 'owner' && admin.role !== 'owner' && (
                                   <button 
                                     onClick={() => setEditingAdmin(admin)}
                                     className="p-2 hover:bg-zinc-100 rounded-lg transition-all"
@@ -3967,34 +3996,36 @@ export default function App() {
                     </div>
                   )}
 
-                  <div className="bg-white rounded-2xl border border-zinc-200 overflow-hidden">
-                    <div className="p-6 border-b border-zinc-100 flex items-center gap-2">
-                      <Lock className="w-5 h-5 text-zinc-900" />
-                      <h3 className="font-bold text-lg">Security Settings</h3>
+                  {user.role === 'owner' && (
+                    <div className="bg-white rounded-2xl border border-zinc-200 overflow-hidden">
+                      <div className="p-6 border-b border-zinc-100 flex items-center gap-2">
+                        <Lock className="w-5 h-5 text-zinc-900" />
+                        <h3 className="font-bold text-lg">Security Settings</h3>
+                      </div>
+                      <div className="p-6">
+                        <form onSubmit={handleChangeAdminCreds} className="flex flex-col sm:flex-row gap-2">
+                          <input
+                            type="password"
+                            placeholder="New Password"
+                            required
+                            className="flex-1 px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm"
+                            value={changeCreds.password}
+                            onChange={e => setChangeCreds({ ...changeCreds, password: e.target.value })}
+                          />
+                          <input
+                            type="text"
+                            maxLength={4}
+                            placeholder="New 2nd Step PIN"
+                            required
+                            className="w-32 px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm"
+                            value={changeCreds.pin}
+                            onChange={e => setChangeCreds({ ...changeCreds, pin: e.target.value.replace(/\D/g, '').slice(0, 4) })}
+                          />
+                          <button className="bg-brand-primary text-white px-4 py-2 rounded-lg text-sm font-bold">Update Credentials</button>
+                        </form>
+                      </div>
                     </div>
-                    <div className="p-6">
-                      <form onSubmit={handleChangeAdminCreds} className="flex flex-col sm:flex-row gap-2">
-                        <input
-                          type="password"
-                          placeholder="New Password"
-                          required
-                          className="flex-1 px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm"
-                          value={changeCreds.password}
-                          onChange={e => setChangeCreds({ ...changeCreds, password: e.target.value })}
-                        />
-                        <input
-                          type="text"
-                          maxLength={4}
-                          placeholder="New 2nd Step PIN"
-                          required
-                          className="w-32 px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm"
-                          value={changeCreds.pin}
-                          onChange={e => setChangeCreds({ ...changeCreds, pin: e.target.value.replace(/\D/g, '').slice(0, 4) })}
-                        />
-                        <button className="bg-brand-primary text-white px-4 py-2 rounded-lg text-sm font-bold">Update Credentials</button>
-                      </form>
-                    </div>
-                  </div>
+                  )}
 
                   {(user.role === 'owner' || user.permissions?.notifications) && (
                     <div className="bg-white rounded-2xl border border-zinc-200 overflow-hidden">
@@ -4252,12 +4283,14 @@ export default function App() {
                                   >
                                     <Settings className="w-4 h-4 text-zinc-400" />
                                   </button>
-                                  <button 
-                                    onClick={() => handleDeleteUser(u.id)}
-                                    className="p-2 hover:bg-rose-50 rounded-lg transition-all group"
-                                  >
-                                    <Trash2 className="w-4 h-4 text-zinc-400 group-hover:text-rose-600" />
-                                  </button>
+                                  {user.role === 'owner' && (
+                                    <button 
+                                      onClick={() => handleDeleteUser(u.id)}
+                                      className="p-2 hover:bg-rose-50 rounded-lg transition-all group"
+                                    >
+                                      <Trash2 className="w-4 h-4 text-zinc-400 group-hover:text-rose-600" />
+                                    </button>
+                                  )}
                                 </>
                               )}
                               <div className="p-2 text-zinc-300">
@@ -4316,6 +4349,20 @@ export default function App() {
                                   )}
                                 </div>
                                 <p className="text-sm text-zinc-500">{driver.phone}</p>
+                                <div className="mt-1 flex flex-wrap gap-1.5">
+                                  <span className="text-[9px] font-black bg-zinc-100 text-zinc-600 px-1.5 py-0.5 rounded uppercase tracking-wider">
+                                    {driver.vehicle_type || '---'}
+                                  </span>
+                                  <span className="text-[9px] font-black bg-zinc-100 text-zinc-600 px-1.5 py-0.5 rounded uppercase tracking-wider">
+                                    {driver.vehicle_number || '---'}
+                                  </span>
+                                  <span className="text-[9px] font-black bg-zinc-100 text-zinc-600 px-1.5 py-0.5 rounded uppercase tracking-wider">
+                                    {driver.vehicle_seats || '---'} Seats
+                                  </span>
+                                  <span className={`text-[9px] font-black px-1.5 py-0.5 rounded uppercase tracking-wider ${driver.vehicle_category === 'private' ? 'bg-rose-50 text-rose-600' : 'bg-emerald-50 text-emerald-600'}`}>
+                                    {driver.vehicle_category || 'Commercial'}
+                                  </span>
+                                </div>
                               </div>
                               <div className="flex items-center gap-2">
                                 {user.role === 'owner' && (
@@ -4326,12 +4373,14 @@ export default function App() {
                                     >
                                       <Settings className="w-4 h-4 text-zinc-400" />
                                     </button>
-                                    <button 
-                                      onClick={() => handleDeleteDriver(driver.id)}
-                                      className="p-2 hover:bg-rose-50 rounded-lg transition-all group"
-                                    >
-                                      <Trash2 className="w-4 h-4 text-zinc-400 group-hover:text-rose-600" />
-                                    </button>
+                                    {user.role === 'owner' && (
+                                      <button 
+                                        onClick={() => handleDeleteDriver(driver.id)}
+                                        className="p-2 hover:bg-rose-50 rounded-lg transition-all group"
+                                      >
+                                        <Trash2 className="w-4 h-4 text-zinc-400 group-hover:text-rose-600" />
+                                      </button>
+                                    )}
                                   </>
                                 )}
                                 <div className="p-1.5 text-zinc-300">
@@ -4528,9 +4577,40 @@ export default function App() {
                               </td>
                               <td className="px-6 py-4 font-medium">{(ride as any).distance || '---'}</td>
                               <td className="px-6 py-4">
-                                <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase ${getStatusColor(ride.status)}`}>
-                                  {getStatusLabel(ride.status, ride.advance_paid)}
-                                </span>
+                                <div className="flex flex-col gap-2">
+                                  <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase ${getStatusColor(ride.status)}`}>
+                                    {getStatusLabel(ride.status, ride.advance_paid)}
+                                  </span>
+                                  {(user.role === 'owner' || user.permissions?.rides) && (
+                                    <select
+                                      value={ride.status}
+                                      onChange={async (e) => {
+                                        const newStatus = e.target.value;
+                                        if (confirm(`Change ride status to ${newStatus}?`)) {
+                                          try {
+                                            await updateDoc(doc(db, 'rides', ride.id), { status: newStatus });
+                                            setToast({ message: 'Ride status updated', type: 'success' });
+                                          } catch (err) {
+                                            setToast({ message: 'Failed to update status', type: 'error' });
+                                          }
+                                        }
+                                      }}
+                                      className="text-[9px] font-bold bg-zinc-50 border border-zinc-200 rounded px-1 py-0.5 outline-none focus:ring-1 focus:ring-zinc-900"
+                                    >
+                                      <option value="pending">Pending</option>
+                                      <option value="accepted">Accepted</option>
+                                      <option value="arrived">Arrived</option>
+                                      <option value="started">Started</option>
+                                      <option value="completed">Completed</option>
+                                      <option value="cancelled">Cancelled</option>
+                                    </select>
+                                  )}
+                                </div>
+                                {ride.status === 'cancelled' && ride.cancellation_reason && (
+                                  <div className="text-[8px] font-bold text-rose-600 uppercase mt-1">
+                                    Reason: {ride.cancellation_reason}
+                                  </div>
+                                )}
                                 {ride.advance_paid && (
                                   <div className="text-[8px] font-black text-emerald-600 uppercase mt-1">
                                     ₹{ride.advance_paid} Adv. Paid
@@ -5019,6 +5099,58 @@ export default function App() {
                               onChange={e => setEditingDriver({ ...editingDriver, password: e.target.value })}
                             />
                           </div>
+                          <div className="grid grid-cols-2 gap-4">
+                            <div className="space-y-1">
+                              <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Vehicle Number</label>
+                              <input
+                                type="text"
+                                className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm"
+                                value={editingDriver.vehicle_number || ''}
+                                onChange={e => setEditingDriver({ ...editingDriver, vehicle_number: e.target.value })}
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Category</label>
+                              <select
+                                className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm"
+                                value={editingDriver.vehicle_category || 'commercial'}
+                                onChange={e => setEditingDriver({ ...editingDriver, vehicle_category: e.target.value })}
+                              >
+                                <option value="commercial">Commercial</option>
+                                <option value="private">Private</option>
+                              </select>
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-2 gap-4">
+                            <div className="space-y-1">
+                              <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Vehicle Type</label>
+                              <select
+                                className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm"
+                                value={editingDriver.vehicle_type || 'Sedan (AC)'}
+                                onChange={e => {
+                                  const type = e.target.value;
+                                  const seats = (VEHICLE_RATES as any)[type]?.seats || 4;
+                                  setEditingDriver({ ...editingDriver, vehicle_type: type, vehicle_seats: seats.toString() });
+                                }}
+                              >
+                                {Object.keys(VEHICLE_RATES).map(type => (
+                                  <option key={type} value={type}>{type}</option>
+                                ))}
+                              </select>
+                            </div>
+                            <div className="space-y-1">
+                              <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Seats</label>
+                              <select
+                                className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm"
+                                value={editingDriver.vehicle_seats || '4'}
+                                onChange={e => setEditingDriver({ ...editingDriver, vehicle_seats: e.target.value })}
+                              >
+                                {[1, 3, 4, 6, 7, 10, 12, 16].map(num => (
+                                  <option key={num} value={num.toString()}>{num} Seater</option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
                           <button className="w-full bg-brand-primary text-white py-3 rounded-xl font-bold hover:bg-brand-primary/90 transition-all shadow-lg">
                             Update Driver
                           </button>
@@ -5094,10 +5226,35 @@ export default function App() {
                               <select
                                 required
                                 className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900"
+                                value={loginData.vehicle_category}
+                                onChange={e => setLoginData({ ...loginData, vehicle_category: e.target.value })}
+                              >
+                                <option value="commercial">Commercial</option>
+                                <option value="private">Private</option>
+                              </select>
+                            </div>
+                            <div className="grid grid-cols-2 gap-4">
+                              <select
+                                required
+                                className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900"
+                                value={loginData.vehicle_type}
+                                onChange={e => {
+                                  const type = e.target.value;
+                                  const seats = (VEHICLE_RATES as any)[type]?.seats || 4;
+                                  setLoginData({ ...loginData, vehicle_type: type, vehicle_seats: seats.toString() });
+                                }}
+                              >
+                                {Object.keys(VEHICLE_RATES).map(type => (
+                                  <option key={type} value={type}>{type}</option>
+                                ))}
+                              </select>
+                              <select
+                                required
+                                className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900"
                                 value={loginData.vehicle_seats}
                                 onChange={e => setLoginData({ ...loginData, vehicle_seats: e.target.value })}
                               >
-                                {[4, 7, 10, 16].map(num => (
+                                {[1, 3, 4, 6, 7, 10, 12, 16].map(num => (
                                   <option key={num} value={num.toString()}>{num} Seater</option>
                                 ))}
                               </select>
@@ -5457,6 +5614,11 @@ export default function App() {
                                   {getStatusLabel(ride.status, ride.advance_paid)}
                                   {ride.driver_id && ride.driver_id !== user.id && ride.driver_name && ` (by ${ride.driver_name})`}
                                 </span>
+                                {ride.status === 'cancelled' && ride.cancellation_reason && (
+                                  <span className="px-2 py-1 rounded text-[10px] font-bold uppercase bg-rose-100 text-rose-700">
+                                    Reason: {ride.cancellation_reason}
+                                  </span>
+                                )}
                                 {ride.advance_paid && (
                                   <span className="px-2 py-1 rounded text-[10px] font-bold uppercase bg-emerald-100 text-emerald-700 flex items-center gap-1">
                                     <Zap className="w-2.5 h-2.5" /> ₹{ride.advance_paid} Advance Paid

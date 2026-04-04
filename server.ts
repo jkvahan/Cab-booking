@@ -8,7 +8,7 @@ import twilio from "twilio";
 import dotenv from "dotenv";
 import webpush from "web-push";
 import Razorpay from "razorpay";
-import { initializeApp, getApps } from "firebase-admin/app";
+import { initializeApp, getApps, applicationDefault } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 
 // Load firebase config manually to avoid import attribute issues in ESM
@@ -19,18 +19,18 @@ const firebaseConfig = JSON.parse(
 dotenv.config();
 
 // Initialize Firebase Admin
-const projectId = process.env.GOOGLE_CLOUD_PROJECT || firebaseConfig.projectId;
-console.log("Initializing Firebase Admin with Project ID:", projectId);
-
 const firebaseApp = !getApps().length
   ? initializeApp({
-      projectId: projectId,
+      credential: applicationDefault(),
+      projectId: firebaseConfig.projectId,
     })
   : getApps()[0];
 
-const databaseId = firebaseConfig.firestoreDatabaseId || "(default)";
-console.log("Using Firestore Database ID:", databaseId);
-const db = getFirestore(firebaseApp, databaseId);
+console.log("Firebase App Project ID:", (firebaseApp as any).options?.projectId || "Default");
+
+const databaseId = firebaseConfig.firestoreDatabaseId;
+console.log("Using Firestore Database ID:", databaseId || "(default)");
+const db = databaseId ? getFirestore(databaseId) : getFirestore();
 
 // Test Firestore connection at startup
 (async () => {
