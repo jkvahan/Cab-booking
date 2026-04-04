@@ -417,6 +417,16 @@ export default function App() {
     }
   };
 
+  const handleDeleteActivity = async (id: string) => {
+    if (user?.role !== 'owner') return;
+    try {
+      await deleteDoc(doc(db, 'activities', id));
+      setToast({ message: 'Activity deleted', type: 'success' });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, `activities/${id}`);
+    }
+  };
+
   useEffect(() => {
     // Register Service Worker for Push Notifications
     if ('serviceWorker' in navigator) {
@@ -598,6 +608,8 @@ export default function App() {
     fetchConfigStatus();
   }, []);
   const [forgotPasswordType, setForgotPasswordType] = useState<'user' | 'driver'>('user');
+  const [cancellationModal, setCancellationModal] = useState<{ rideId: string, type: 'user' | 'driver' } | null>(null);
+  const [cancellationReason, setCancellationReason] = useState('');
   const [forgotPasswordData, setForgotPasswordData] = useState({ phone: '', pin: '', newPassword: '' });
   const [editingNotification, setEditingNotification] = useState<Notification | null>(null);
   const [isEditingNotificationModalOpen, setIsEditingNotificationModalOpen] = useState(false);
@@ -1047,49 +1059,108 @@ export default function App() {
   };
 
   const handleUserCancelRide = async (rideId: string) => {
-    setConfirmModal({
-      message: "WARNING: Cancelling this ride will increase your next ride's fare by 2% and you will lose any available discounts. Are you sure you want to cancel?",
-      onConfirm: async () => {
-        try {
-          const rideRef = doc(db, 'rides', rideId);
-          const rideSnap = await getDoc(rideRef);
-          const rideData = rideSnap.data();
-          
-          await updateDoc(rideRef, { status: 'cancelled' });
+    setCancellationModal({ rideId, type: 'user' });
+  };
 
-          // Increment consecutive cancellations for the user
-          if (user?.id) {
-            const userRef = doc(db, 'users', user.id);
-            const userSnap = await getDoc(userRef);
-            if (userSnap.exists()) {
-              const currentCancellations = userSnap.data().consecutive_cancellations || 0;
-              const nextCancellations = currentCancellations + 1;
-              await updateDoc(userRef, { consecutive_cancellations: nextCancellations });
-              // Update local state
-              setUser(prev => prev ? { ...prev, consecutive_cancellations: nextCancellations } : null);
-            }
+  const handleConfirmCancellation = async () => {
+    if (!cancellationModal || !cancellationReason.trim()) {
+      setToast({ message: 'Please provide a reason for cancellation', type: 'error' });
+      return;
+    }
+
+    const { rideId, type } = cancellationModal;
+    setIsActionLoading(true);
+
+    try {
+      const rideRef = doc(db, 'rides', rideId);
+      const rideSnap = await getDoc(rideRef);
+      if (!rideSnap.exists()) {
+        setToast({ message: 'Ride not found', type: 'error' });
+        return;
+      }
+      const rideData = rideSnap.data();
+
+      if (type === 'user') {
+        await updateDoc(rideRef, { 
+          status: 'cancelled',
+          cancellation_reason: cancellationReason
+        });
+
+        // Increment consecutive cancellations for the user
+        if (user?.id) {
+          const userRef = doc(db, 'users', user.id);
+          const userSnap = await getDoc(userRef);
+          if (userSnap.exists()) {
+            const currentCancellations = userSnap.data().consecutive_cancellations || 0;
+            const nextCancellations = currentCancellations + 1;
+            await updateDoc(userRef, { consecutive_cancellations: nextCancellations });
+            setUser(prev => prev ? { ...prev, consecutive_cancellations: nextCancellations } : null);
           }
+        }
 
-          // Send Notifications
-          sendNotification('RIDE_CANCELLED', {
-            message: `Ride ${rideData?.tracking_id} has been cancelled by the user (${rideData?.user_phone || 'N/A'}).`,
-            phone: rideData?.user_phone
+        sendNotification('RIDE_CANCELLED', {
+          message: `Ride ${rideData?.tracking_id} has been cancelled by the user. Reason: ${cancellationReason}`,
+          phone: rideData?.user_phone
+        });
+
+        await addDoc(collection(db, 'notifications'), {
+          message: `Ride ${rideData?.tracking_id} cancelled by user. Reason: ${cancellationReason}`,
+          target: 'admin_alert',
+          created_at: new Date().toISOString(),
+          read_by: []
+        });
+
+        setToast({ message: "Ride Cancelled", type: 'success' });
+      } else {
+        // Driver cancellation
+        const driverId = rideData.driver_id;
+        if (!driverId) {
+          setToast({ message: 'No driver assigned to this ride', type: 'error' });
+          return;
+        }
+
+        // Reset the ride to pending
+        await updateDoc(rideRef, {
+          status: 'pending',
+          driver_id: null,
+          accepted_at: null,
+          eta: null,
+          start_otp: null,
+          end_otp: null,
+          cancellation_reason: `Driver (${user?.name}): ${cancellationReason}`
+        });
+
+        sendNotification('RIDE_DRIVER_CANCELLED', {
+          message: `Driver ${user?.name} has cancelled the ride ${rideData?.tracking_id}. Reason: ${cancellationReason}. The ride is now back to pending status.`,
+          phone: rideData?.user_phone
+        });
+
+        // Fine the driver
+        const driverRef = doc(db, 'drivers', driverId);
+        const driverSnap = await getDoc(driverRef);
+        if (driverSnap.exists()) {
+          const currentBalance = driverSnap.data().wallet_balance || 0;
+          const newBalance = currentBalance - 50;
+          await updateDoc(driverRef, { wallet_balance: newBalance });
+          await addDoc(collection(db, 'transactions'), {
+            driver_id: driverId,
+            amount: 50,
+            type: 'debit',
+            description: `Cancellation Fine (Ride ID: ${rideData.tracking_id || rideId}). Reason: ${cancellationReason}`,
+            created_at: new Date().toISOString()
           });
-
-          // Add to notifications collection for admin/owner
-          await addDoc(collection(db, 'notifications'), {
-            message: `Ride ${rideData?.tracking_id} cancelled by user. Contact: ${rideData?.user_phone || 'N/A'}`,
-            target: 'admin_alert',
-            created_at: new Date().toISOString(),
-            read_by: []
-          });
-
-          setToast({ message: "Ride Cancelled", type: 'success' });
-        } catch (err) {
-          handleFirestoreError(err, OperationType.UPDATE, `rides/${rideId}`);
+          setToast({ message: 'Ride cancelled. ₹50 fine deducted from your wallet.', type: 'success' });
         }
       }
-    });
+
+      setCancellationModal(null);
+      setCancellationReason('');
+    } catch (err) {
+      console.error("Cancellation error:", err);
+      handleFirestoreError(err, OperationType.UPDATE, `rides/${rideId}`);
+    } finally {
+      setIsActionLoading(false);
+    }
   };
 
   const handleSubmitReview = async () => {
@@ -2660,72 +2731,7 @@ export default function App() {
 
   const handleCancelRide = async (rideId: string) => {
     if (!user) return;
-    setConfirmModal({
-      message: "Cancelling after acceptance will result in a ₹50 fine. Continue?",
-      onConfirm: async () => {
-        setIsActionLoading(true);
-        try {
-          const rideRef = doc(db, 'rides', rideId);
-          const rideSnap = await getDoc(rideRef);
-          
-          if (!rideSnap.exists()) {
-            setToast({ message: 'Ride not found', type: 'error' });
-            return;
-          }
-
-          const rideData = rideSnap.data();
-          const driverId = rideData.driver_id;
-
-          if (!driverId) {
-            setToast({ message: 'No driver assigned to this ride', type: 'error' });
-            return;
-          }
-
-          // 1. Reset the ride to pending
-          await updateDoc(rideRef, {
-            status: 'pending',
-            driver_id: null,
-            accepted_at: null,
-            eta: null,
-            start_otp: null,
-            end_otp: null
-          });
-
-          // Send Notifications
-          sendNotification('RIDE_DRIVER_CANCELLED', {
-            message: `Driver ${user?.name} has cancelled the ride ${rideData?.tracking_id}. The ride is now back to pending status.`,
-            phone: rideData?.user_phone
-          });
-
-          // 2. Fine the driver
-          const driverRef = doc(db, 'drivers', driverId);
-          const driverSnap = await getDoc(driverRef);
-          
-          if (driverSnap.exists()) {
-            const currentBalance = driverSnap.data().wallet_balance || 0;
-            const newBalance = currentBalance - 50;
-            
-            await updateDoc(driverRef, { wallet_balance: newBalance });
-            
-            // 3. Record the fine transaction
-            await addDoc(collection(db, 'transactions'), {
-              driver_id: driverId,
-              amount: 50,
-              type: 'debit',
-              description: `Cancellation Fine (Ride ID: ${rideData.tracking_id || rideId})`,
-              created_at: new Date().toISOString()
-            });
-            
-            setToast({ message: 'Ride cancelled. ₹50 fine deducted from your wallet.', type: 'success' });
-          }
-        } catch (err) {
-          console.error("Cancellation error:", err);
-          handleFirestoreError(err, OperationType.UPDATE, `rides/${rideId}`);
-        } finally {
-          setIsActionLoading(false);
-        }
-      }
-    });
+    setCancellationModal({ rideId, type: 'driver' });
   };
 
   const setDriverStatus = async (driverId: string, newStatus: 'active' | 'inactive' | 'under verification' | 'documents received' | 'rejected' | 'documents not received') => {
@@ -3833,9 +3839,20 @@ export default function App() {
                                           <p className="text-xs text-zinc-500 mt-1">{log.details}</p>
                                         </div>
                                       </div>
-                                      <div className="text-right shrink-0">
-                                        <p className="text-[10px] font-black text-zinc-400 uppercase tracking-widest">{new Date(log.timestamp).toLocaleDateString()}</p>
-                                        <p className="text-xs font-bold text-zinc-900">{new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                                      <div className="text-right shrink-0 flex flex-col items-end gap-2">
+                                        <div>
+                                          <p className="text-[10px] font-black text-zinc-400 uppercase tracking-widest">{new Date(log.timestamp).toLocaleDateString()}</p>
+                                          <p className="text-xs font-bold text-zinc-900">{new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                                        </div>
+                                        {user.role === 'owner' && (
+                                          <button 
+                                            onClick={() => handleDeleteActivity(log.id)}
+                                            className="p-1.5 hover:bg-rose-50 text-zinc-400 hover:text-rose-600 rounded-lg transition-all"
+                                            title="Delete Activity"
+                                          >
+                                            <Trash2 className="w-3.5 h-3.5" />
+                                          </button>
+                                        )}
                                       </div>
                                     </motion.div>
                                   ))
@@ -6135,6 +6152,70 @@ export default function App() {
                   className="flex-1 px-6 py-3 bg-brand-primary text-white rounded-2xl text-sm font-bold hover:bg-brand-primary/90 transition-all shadow-lg disabled:opacity-50"
                 >
                   {isActionLoading ? 'Resetting...' : 'Update Password'}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {cancellationModal && (
+          <div className="fixed inset-0 bg-brand-dark/50 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="bg-white w-full max-w-md rounded-[2.5rem] shadow-2xl overflow-hidden border border-white/20"
+            >
+              <div className="p-8 border-b border-zinc-100 flex justify-between items-center bg-brand-dark text-white relative overflow-hidden">
+                <div className="absolute top-0 right-0 w-32 h-32 bg-rose-500/10 rounded-full -mr-16 -mt-16 blur-2xl" />
+                <div className="relative z-10">
+                  <h3 className="font-black text-2xl tracking-tight">Cancel Ride</h3>
+                  <p className="text-xs font-bold opacity-60 uppercase tracking-widest mt-1">Please provide a reason</p>
+                </div>
+                <button onClick={() => setCancellationModal(null)} className="p-2 hover:bg-white/10 rounded-full transition-colors relative z-10">
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+              <div className="p-8 space-y-6">
+                {cancellationModal.type === 'user' && (
+                  <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl flex gap-3 items-start">
+                    <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+                    <p className="text-xs font-bold text-rose-700 leading-relaxed">
+                      WARNING: Cancelling this ride will increase your next ride's fare by 2% and you will lose any available discounts.
+                    </p>
+                  </div>
+                )}
+                {cancellationModal.type === 'driver' && (
+                  <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl flex gap-3 items-start">
+                    <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+                    <p className="text-xs font-bold text-rose-700 leading-relaxed">
+                      WARNING: Cancelling after acceptance will result in a ₹50 fine deducted from your wallet.
+                    </p>
+                  </div>
+                )}
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-zinc-400 ml-1">Cancellation Reason</label>
+                  <textarea 
+                    placeholder="Why are you cancelling this ride?"
+                    className="w-full px-5 py-4 bg-zinc-50 border border-zinc-200 rounded-2xl text-sm font-medium focus:ring-2 focus:ring-brand-primary outline-none min-h-[120px] transition-all"
+                    value={cancellationReason}
+                    onChange={e => setCancellationReason(e.target.value)}
+                  />
+                </div>
+              </div>
+              <div className="p-8 bg-zinc-50 flex gap-4">
+                <button 
+                  onClick={() => setCancellationModal(null)}
+                  className="flex-1 px-6 py-4 bg-white border border-zinc-200 rounded-2xl text-sm font-black hover:bg-zinc-100 transition-all shadow-sm active:scale-[0.98]"
+                >
+                  Go Back
+                </button>
+                <button 
+                  onClick={handleConfirmCancellation}
+                  disabled={isActionLoading || !cancellationReason.trim()}
+                  className="flex-1 px-6 py-4 bg-rose-600 text-white rounded-2xl text-sm font-black hover:bg-rose-700 transition-all shadow-lg shadow-rose-200 disabled:opacity-50 active:scale-[0.98]"
+                >
+                  {isActionLoading ? 'Processing...' : 'Confirm Cancel'}
                 </button>
               </div>
             </motion.div>
