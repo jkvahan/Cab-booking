@@ -19,15 +19,18 @@ const firebaseConfig = JSON.parse(
 dotenv.config();
 
 // Initialize Firebase Admin
-console.log("Initializing Firebase Admin with Project ID:", firebaseConfig.projectId);
+const projectId = process.env.GOOGLE_CLOUD_PROJECT || firebaseConfig.projectId;
+console.log("Initializing Firebase Admin with Project ID:", projectId);
+
 const firebaseApp = !getApps().length
   ? initializeApp({
-      projectId: firebaseConfig.projectId,
+      projectId: projectId,
     })
   : getApps()[0];
 
-console.log("Using Firestore Database ID:", firebaseConfig.firestoreDatabaseId || "(default)");
-const db = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId);
+const databaseId = firebaseConfig.firestoreDatabaseId || "(default)";
+console.log("Using Firestore Database ID:", databaseId);
+const db = getFirestore(firebaseApp, databaseId);
 
 // Test Firestore connection at startup
 (async () => {
