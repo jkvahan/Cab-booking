@@ -8,6 +8,7 @@ import twilio from "twilio";
 import dotenv from "dotenv";
 import webpush from "web-push";
 import Razorpay from "razorpay";
+import cors from "cors";
 import { initializeApp, getApps, applicationDefault } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 
@@ -112,6 +113,7 @@ async function startServer() {
 
   app.use(express.json({ limit: '50mb' }));
   app.use(express.urlencoded({ limit: '50mb', extended: true }));
+  app.use(cors());
 
   // Health check
   app.get("/health", (req, res) => res.send("OK"));
@@ -127,10 +129,16 @@ async function startServer() {
     });
   });
 
-  // Global Error Handler
-  app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
-    console.error("Express Error:", err);
-    res.status(500).json({ error: "Internal Server Error", details: err.message });
+  // System Memory Endpoint
+  app.get("/api/system/memory", (req, res) => {
+    const memoryUsage = process.memoryUsage();
+    res.json({
+      rss: Math.round(memoryUsage.rss / 1024 / 1024),
+      heapTotal: Math.round(memoryUsage.heapTotal / 1024 / 1024),
+      heapUsed: Math.round(memoryUsage.heapUsed / 1024 / 1024),
+      external: Math.round(memoryUsage.external / 1024 / 1024),
+      limit: 16384 // We set this in package.json
+    });
   });
 
   // Razorpay Order Creation
@@ -288,6 +296,12 @@ async function startServer() {
       res.sendFile(path.resolve("dist/index.html"));
     });
   }
+
+  // Global Error Handler - MUST BE LAST
+  app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    console.error("Express Error:", err);
+    res.status(500).json({ error: "Internal Server Error", details: err.message });
+  });
 
   process.on('uncaughtException', (err) => {
     console.error('Uncaught Exception:', err);

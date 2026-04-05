@@ -4,12 +4,12 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "NODE_OPTIONS='--max-old-space-size=4096' tsx server.ts",
+    "dev": "NODE_OPTIONS='--max-old-space-size=16384' tsx server.ts",
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
-    "start": "node --max-old-space-size=4096 server.ts"
+    "start": "node --max-old-space-size=16384 server.ts"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",

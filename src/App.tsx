@@ -596,6 +596,7 @@ export default function App() {
   const [isRechargeModalOpen, setIsRechargeModalOpen] = useState(false);
   const [useFreeRide, setUseFreeRide] = useState(false);
   const [configStatus, setConfigStatus] = useState<any>(null);
+  const [memoryInfo, setMemoryInfo] = useState<any>(null);
 
   const fetchConfigStatus = async () => {
     try {
@@ -607,9 +608,33 @@ export default function App() {
     }
   };
 
+  const fetchMemoryInfo = async () => {
+    if (user?.role !== 'owner') return;
+    try {
+      console.log('Fetching memory info...');
+      const response = await fetch('/api/system/memory');
+      if (!response.ok) {
+        throw new Error(`Server returned ${response.status}: ${response.statusText}`);
+      }
+      const data = await response.json();
+      console.log('Memory info received:', data);
+      setMemoryInfo(data);
+    } catch (err) {
+      console.error('Failed to fetch memory info:', err);
+    }
+  };
+
   useEffect(() => {
     fetchConfigStatus();
   }, []);
+
+  useEffect(() => {
+    if (user?.role === 'owner') {
+      fetchMemoryInfo();
+      const interval = setInterval(fetchMemoryInfo, 30000); // Update every 30 seconds
+      return () => clearInterval(interval);
+    }
+  }, [user]);
   const [forgotPasswordType, setForgotPasswordType] = useState<'user' | 'driver'>('user');
   const [cancellationModal, setCancellationModal] = useState<{ rideId: string, type: 'user' | 'driver' } | null>(null);
   const [cancellationReason, setCancellationReason] = useState('');
@@ -909,9 +934,6 @@ export default function App() {
 
     let cleanupInterval: any;
     if (view === 'admin') {
-      cleanupDatabase();
-      cleanupInterval = setInterval(cleanupDatabase, 60 * 60 * 1000); // Every hour
-      
       unsubscribeWithdrawals = onSnapshot(collection(db, 'withdrawal_requests'), (snapshot) => {
         const requests = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as any));
         setAdminWithdrawals(requests);
@@ -1761,61 +1783,6 @@ export default function App() {
     }
   };
 
-  const cleanupDatabase = async () => {
-    if (!user) return;
-    if (user.role !== 'owner' && !user.permissions?.notifications) return;
-    
-    try {
-      const now = Date.now();
-      const twentyFourHoursAgo = new Date(now - 24 * 60 * 60 * 1000).toISOString();
-      const thirtyDaysAgo = new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString();
-      const twelveHoursAgo = new Date(now - 12 * 60 * 60 * 1000).toISOString();
-
-      // 1. Cleanup Notifications (12h)
-      const notifQuery = query(collection(db, 'notifications'), where('created_at', '<', twelveHoursAgo));
-      const notifSnap = await getDocs(notifQuery);
-      if (notifSnap.size > 0) {
-        await Promise.all(notifSnap.docs.map(d => deleteDoc(d.ref)));
-        console.log(`Cleaned up ${notifSnap.size} old notifications.`);
-      }
-
-      // 2. Cleanup Transactions (24h)
-      const txQuery = query(collection(db, 'transactions'), where('created_at', '<', twentyFourHoursAgo));
-      const txSnap = await getDocs(txQuery);
-      if (txSnap.size > 0) {
-        await Promise.all(txSnap.docs.map(d => deleteDoc(d.ref)));
-        console.log(`Cleaned up ${txSnap.size} old transactions.`);
-      }
-
-      // 3. Cleanup Withdrawal Requests (24h)
-      const withdrawQuery = query(collection(db, 'withdrawal_requests'), where('created_at', '<', twentyFourHoursAgo));
-      const withdrawSnap = await getDocs(withdrawQuery);
-      if (withdrawSnap.size > 0) {
-        await Promise.all(withdrawSnap.docs.map(d => deleteDoc(d.ref)));
-        console.log(`Cleaned up ${withdrawSnap.size} old withdrawal requests.`);
-      }
-
-      // 4. Cleanup Completed Rides (24h)
-      const rideQuery = query(collection(db, 'rides'), where('status', '==', 'completed'), where('created_at', '<', twentyFourHoursAgo));
-      const rideSnap = await getDocs(rideQuery);
-      if (rideSnap.size > 0) {
-        await Promise.all(rideSnap.docs.map(d => deleteDoc(d.ref)));
-        console.log(`Cleaned up ${rideSnap.size} old completed rides.`);
-      }
-
-      // 5. Cleanup Inactive Users (30 days)
-      const userQuery = query(collection(db, 'users'), where('last_active', '<', thirtyDaysAgo));
-      const userSnap = await getDocs(userQuery);
-      if (userSnap.size > 0) {
-        await Promise.all(userSnap.docs.map(d => deleteDoc(d.ref)));
-        console.log(`Cleaned up ${userSnap.size} inactive users.`);
-      }
-
-    } catch (err) {
-      console.error('Failed to cleanup database:', err);
-    }
-  };
-
   const handleUpdateNotification = async () => {
     if (!editingNotification) return;
     setIsActionLoading(true);
@@ -1833,28 +1800,6 @@ export default function App() {
       handleFirestoreError(err, OperationType.UPDATE, `notifications/${editingNotification.id}`);
     } finally {
       setIsActionLoading(false);
-    }
-  };
-
-  const cleanupOldTransactions = async (driverId: string) => {
-    try {
-      const q = query(
-        collection(db, 'transactions'),
-        where('driver_id', '==', driverId)
-      );
-      const snapshot = await getDocs(q);
-      const now = new Date();
-      const batch = snapshot.docs.filter(doc => {
-        const createdAt = new Date(doc.data().created_at);
-        const diff = now.getTime() - createdAt.getTime();
-        return diff > 24 * 60 * 60 * 1000;
-      });
-
-      for (const d of batch) {
-        await deleteDoc(doc(db, 'transactions', d.id));
-      }
-    } catch (err) {
-      console.error("Cleanup error:", err);
     }
   };
 
@@ -3751,11 +3696,12 @@ export default function App() {
                           </div>
                         </div>
 
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                           {(user.role === 'owner' || user.permissions?.rides || user.permissions?.drivers) && [
                             { label: 'Total Rides', value: adminRides.length, color: 'from-blue-500 to-indigo-600', icon: Car, show: user.role === 'owner' || user.permissions?.rides },
                             { label: 'Active Drivers', value: adminDrivers.filter(d => d.status === 'active').length, color: 'from-orange-500 to-rose-600', icon: Users, show: user.role === 'owner' || user.permissions?.drivers },
-                            { label: 'Total Revenue', value: `₹${adminRides.reduce((acc, r) => acc + r.fare, 0)}`, color: 'from-emerald-500 to-teal-600', icon: IndianRupee, show: user.role === 'owner' || user.permissions?.rides }
+                            { label: 'Total Revenue', value: `₹${adminRides.reduce((acc, r) => acc + r.fare, 0)}`, color: 'from-emerald-500 to-teal-600', icon: IndianRupee, show: user.role === 'owner' || user.permissions?.rides },
+                            { label: 'Memory Usage', value: memoryInfo ? `${memoryInfo.heapUsed}MB / ${memoryInfo.limit}MB` : 'Loading...', color: 'from-purple-500 to-pink-600', icon: Activity, show: user.role === 'owner' }
                           ].filter(s => s.show).map((stat, i) => (
                             <motion.div 
                               key={i}
@@ -3797,7 +3743,7 @@ export default function App() {
                                   <div className="text-center p-1.5 bg-white/5 rounded-lg border border-white/10">
                                     <p className="text-[6px] uppercase font-black tracking-widest text-zinc-500">Memory</p>
                                     <p className="text-[10px] font-black text-emerald-400">
-                                      {(100 - Math.min(100, (adminRides.length + adminUsers.length + adminDrivers.length) / 100)).toFixed(0)}%
+                                      {memoryInfo ? `${Math.round((memoryInfo.heapUsed / memoryInfo.limit) * 100)}%` : '...'}%
                                     </p>
                                   </div>
                                 </div>
@@ -3807,16 +3753,16 @@ export default function App() {
                                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-1">
                                   <div className="flex items-center gap-2">
                                     <div className="w-1 h-1 bg-emerald-400 rounded-full animate-pulse" />
-                                    <p className="text-[8px] uppercase font-black tracking-widest text-zinc-400">Storage Capacity Utilization</p>
+                                    <p className="text-[8px] uppercase font-black tracking-widest text-zinc-400">Database Storage (Docs)</p>
                                   </div>
                                   <p className="text-[8px] font-black text-emerald-400 bg-emerald-400/10 px-1.5 py-0.5 rounded-md">
-                                    {(adminRides.length + adminUsers.length + adminDrivers.length)} / 10,000 Documents
+                                    {(adminRides.length + adminUsers.length + adminDrivers.length)} / 20,000,000 Documents
                                   </p>
                                 </div>
                                 <div className="w-full bg-white/5 h-1.5 rounded-full overflow-hidden border border-white/10">
                                   <motion.div 
                                     initial={{ width: 0 }}
-                                    animate={{ width: `${Math.min(100, (adminRides.length + adminUsers.length + adminDrivers.length) / 100)}%` }}
+                                    animate={{ width: `${Math.min(100, (adminRides.length + adminUsers.length + adminDrivers.length) / 200000)}%` }}
                                     className="bg-gradient-to-r from-emerald-500 via-emerald-400 to-teal-400 h-full rounded-full"
                                   />
                                 </div>
