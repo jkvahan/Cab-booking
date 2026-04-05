@@ -28,19 +28,11 @@ dotenv.config();
 let firebaseApp;
 try {
   if (!getApps().length) {
-    // Try to initialize with applicationDefault first
-    try {
-      firebaseApp = initializeApp({
-        credential: applicationDefault(),
-        projectId: firebaseConfig.projectId,
-      });
-      console.log("Firebase Admin initialized with applicationDefault");
-    } catch (e) {
-      console.warn("Failed to initialize with applicationDefault, falling back to basic initializeApp:", e);
-      firebaseApp = initializeApp({
-        projectId: firebaseConfig.projectId,
-      });
-    }
+    firebaseApp = initializeApp({
+      credential: applicationDefault(),
+      projectId: firebaseConfig.projectId,
+    });
+    console.log("Firebase Admin initialized with applicationDefault and projectId:", firebaseConfig.projectId);
   } else {
     firebaseApp = getApps()[0];
   }
@@ -53,11 +45,8 @@ console.log("Using Firestore Database ID:", databaseId || "(default)");
 
 let db: any;
 try {
-  if (firebaseApp) {
-    db = databaseId ? getFirestore(firebaseApp, databaseId) : getFirestore(firebaseApp);
-  } else {
-    db = databaseId ? getFirestore(databaseId) : getFirestore();
-  }
+  // In firebase-admin, getFirestore can take the databaseId as the first argument if using the default app
+  db = databaseId ? getFirestore(databaseId) : getFirestore();
 } catch (error) {
   console.error("Failed to get Firestore instance:", error);
 }

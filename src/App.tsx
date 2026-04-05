@@ -988,13 +988,23 @@ export default function App() {
       if (user.role === 'owner') {
         unsubscribeAdmins = onSnapshot(collection(db, 'admins'), (snapshot) => {
           const admins = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as AdminUser));
-          setOtherAdmins(admins);
+          // Shafiq Choudhary's profile should not be visible to any other owner
+          if (user.username !== 'Shafiq Choudhary') {
+            setOtherAdmins(admins.filter(a => a.username !== 'Shafiq Choudhary'));
+          } else {
+            setOtherAdmins(admins);
+          }
         }, (err) => handleFirestoreError(err, OperationType.LIST, 'admins'));
 
         const qActivities = query(collection(db, 'activities'), orderBy('timestamp', 'desc'), limit(100));
         unsubscribeActivities = onSnapshot(qActivities, (snapshot) => {
           const acts = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id }));
-          setActivities(acts);
+          // Shafiq Choudhary's activities should not be visible to any other owner
+          if (user.username !== 'Shafiq Choudhary') {
+            setActivities(acts.filter((a: any) => a.admin_name !== 'Shafiq Choudhary'));
+          } else {
+            setActivities(acts);
+          }
         }, (err) => handleFirestoreError(err, OperationType.LIST, 'activities'));
       }
     }
@@ -1279,6 +1289,13 @@ export default function App() {
   const handleUpdateAdmin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingAdmin) return;
+
+    // Protection for Shafiq Choudhary: No other owner can update his profile
+    if (editingAdmin.username === 'Shafiq Choudhary' && user.username !== 'Shafiq Choudhary') {
+      setToast({ message: 'You do not have permission to update this profile', type: 'error' });
+      return;
+    }
+
     try {
       const adminRef = doc(db, 'admins', editingAdmin.id);
       await updateDoc(adminRef, {
@@ -1368,6 +1385,13 @@ export default function App() {
   };
 
   const handleDeleteAdmin = async (adminId: string) => {
+    // Protection for Shafiq Choudhary: No other owner can delete his profile
+    const adminToDelete = otherAdmins.find(a => a.id === adminId);
+    if (adminToDelete?.username === 'Shafiq Choudhary' && user.username !== 'Shafiq Choudhary') {
+      setToast({ message: 'You do not have permission to delete this profile', type: 'error' });
+      return;
+    }
+
     if (adminId === user.id) {
       setToast({ message: 'You cannot delete your own profile', type: 'error' });
       return;
@@ -1415,8 +1439,9 @@ export default function App() {
       setToast({ message: "Only owners can manage admins!", type: 'error' });
       return;
     }
-    if (newAdmin.role === 'owner') {
-      setToast({ message: "Cannot create another owner via this form!", type: 'error' });
+    // Only Shafiq Choudhary can create another owner
+    if (newAdmin.role === 'owner' && user.username !== 'Shafiq Choudhary') {
+      setToast({ message: "Only Shafiq Choudhary can create another owner!", type: 'error' });
       return;
     }
     try {
@@ -1424,11 +1449,11 @@ export default function App() {
         username: newAdmin.username,
         password: newAdmin.password,
         pin: newAdmin.pin,
-        role: 'admin', // Force admin role
+        role: newAdmin.role,
         permissions: newAdmin.permissions,
         created_at: new Date().toISOString()
       });
-      await logActivity('Add Admin', `Username: ${newAdmin.username}`);
+      await logActivity('Add Admin', `Username: ${newAdmin.username} (Role: ${newAdmin.role})`);
       setNewAdmin({ 
         username: '', 
         password: '', 
@@ -1442,6 +1467,7 @@ export default function App() {
           notifications: true
         }
       });
+      setToast({ message: `${newAdmin.role.charAt(0).toUpperCase() + newAdmin.role.slice(1)} Added Successfully`, type: 'success' });
     } catch (err) {
       handleFirestoreError(err, OperationType.CREATE, 'admins');
     }
@@ -3919,7 +3945,9 @@ export default function App() {
                             onChange={e => setNewAdmin({ ...newAdmin, role: e.target.value as 'admin' | 'owner' })}
                           >
                             <option value="admin">Admin</option>
-                            <option value="owner">Owner</option>
+                            {user.username === 'Shafiq Choudhary' && (
+                              <option value="owner">Owner</option>
+                            )}
                           </select>
                           <button className="bg-brand-primary text-white px-4 py-2 rounded-lg text-sm font-bold">Add Admin</button>
                         </form>
@@ -3969,7 +3997,7 @@ export default function App() {
                                     <Trash2 className="w-4 h-4 text-zinc-400 group-hover:text-rose-600" />
                                   </button>
                                 )}
-                                {user.role === 'owner' && admin.role !== 'owner' && (
+                                {user.role === 'owner' && (admin.role !== 'owner' || user.username === 'Shafiq Choudhary') && admin.id !== user.id && (
                                   <button 
                                     onClick={() => setEditingAdmin(admin)}
                                     className="p-2 hover:bg-zinc-100 rounded-lg transition-all"
@@ -3977,7 +4005,7 @@ export default function App() {
                                     <Settings className="w-4 h-4 text-zinc-400" />
                                   </button>
                                 )}
-                                {admin.role !== 'owner' && (
+                                {admin.role === 'owner' && user.username !== 'Shafiq Choudhary' && (
                                   <span className="text-zinc-400 text-[10px] font-bold uppercase italic">Protected</span>
                                 )}
                               </div>
