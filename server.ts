@@ -12,36 +12,67 @@ import { initializeApp, getApps, applicationDefault } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 
 // Load firebase config manually to avoid import attribute issues in ESM
-const firebaseConfig = JSON.parse(
-  fs.readFileSync(path.resolve("firebase-applet-config.json"), "utf-8")
-);
+let firebaseConfig: any = {};
+try {
+  firebaseConfig = JSON.parse(
+    fs.readFileSync(path.resolve("firebase-applet-config.json"), "utf-8")
+  );
+} catch (error) {
+  console.error("Failed to load firebase-applet-config.json:", error);
+}
 
 dotenv.config();
 
 // Initialize Firebase Admin
-const firebaseApp = !getApps().length
-  ? initializeApp({
-      credential: applicationDefault(),
-      projectId: firebaseConfig.projectId,
-    })
-  : getApps()[0];
-
-console.log("Firebase App Project ID:", (firebaseApp as any).options?.projectId || "Default");
+let firebaseApp;
+try {
+  if (!getApps().length) {
+    // Try to initialize with applicationDefault first
+    try {
+      firebaseApp = initializeApp({
+        credential: applicationDefault(),
+        projectId: firebaseConfig.projectId,
+      });
+      console.log("Firebase Admin initialized with applicationDefault");
+    } catch (e) {
+      console.warn("Failed to initialize with applicationDefault, falling back to basic initializeApp:", e);
+      firebaseApp = initializeApp({
+        projectId: firebaseConfig.projectId,
+      });
+    }
+  } else {
+    firebaseApp = getApps()[0];
+  }
+} catch (error) {
+  console.error("Critical: Failed to initialize Firebase Admin:", error);
+}
 
 const databaseId = firebaseConfig.firestoreDatabaseId;
 console.log("Using Firestore Database ID:", databaseId || "(default)");
-const db = databaseId ? getFirestore(databaseId) : getFirestore();
+
+let db: any;
+try {
+  if (firebaseApp) {
+    db = databaseId ? getFirestore(firebaseApp, databaseId) : getFirestore(firebaseApp);
+  } else {
+    db = databaseId ? getFirestore(databaseId) : getFirestore();
+  }
+} catch (error) {
+  console.error("Failed to get Firestore instance:", error);
+}
 
 // Test Firestore connection at startup
-(async () => {
-  try {
-    console.log("Testing Firestore connection...");
-    await db.collection('push_subscriptions').limit(1).get();
-    console.log("Firestore connection successful.");
-  } catch (error) {
-    console.error("Firestore startup connection test failed:", error);
-  }
-})();
+if (db) {
+  (async () => {
+    try {
+      console.log("Testing Firestore connection...");
+      await db.collection('push_subscriptions').limit(1).get();
+      console.log("Firestore connection successful.");
+    } catch (error) {
+      console.error("Firestore startup connection test failed:", error);
+    }
+  })();
+}
 
 const isProd = process.env.NODE_ENV === "production";
 
@@ -82,6 +113,9 @@ async function startServer() {
   app.use(express.json({ limit: '50mb' }));
   app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
+  // Health check
+  app.get("/health", (req, res) => res.send("OK"));
+
   // Config Status Endpoint
   app.get("/api/config/status", (req, res) => {
     res.json({
@@ -91,6 +125,12 @@ async function startServer() {
       twilio_token: !!process.env.TWILIO_AUTH_TOKEN,
       vapid_keys: !!(process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY)
     });
+  });
+
+  // Global Error Handler
+  app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    console.error("Express Error:", err);
+    res.status(500).json({ error: "Internal Server Error", details: err.message });
   });
 
   // Razorpay Order Creation
@@ -223,11 +263,25 @@ async function startServer() {
 
   // Vite middleware for development
   if (!isProd) {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
+    try {
+      console.log("Initializing Vite middleware...");
+      const vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: "spa",
+      });
+      app.use(vite.middlewares);
+      console.log("Vite middleware initialized.");
+    } catch (err) {
+      console.error("Failed to initialize Vite middleware:", err);
+      // Fallback to serving static files if build exists
+      if (fs.existsSync(path.resolve("dist"))) {
+        console.log("Falling back to serving static files from dist...");
+        app.use(express.static(path.resolve("dist")));
+        app.get("*", (req, res) => {
+          res.sendFile(path.resolve("dist/index.html"));
+        });
+      }
+    }
   } else {
     app.use(express.static(path.resolve("dist")));
     app.get("*", (req, res) => {
@@ -235,10 +289,22 @@ async function startServer() {
     });
   }
 
+  process.on('uncaughtException', (err) => {
+    console.error('Uncaught Exception:', err);
+  });
+
+  process.on('unhandledRejection', (reason, promise) => {
+    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  });
+
   const PORT = 3000;
+  console.log(`Attempting to start server on port ${PORT}...`);
   server.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://0.0.0.0:${PORT}`);
   });
 }
 
-startServer();
+console.log("Starting server script...");
+startServer().catch(err => {
+  console.error("Failed to start server:", err);
+});
