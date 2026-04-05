@@ -284,6 +284,7 @@ interface Notification {
   admin_id?: string;
   created_at: string;
   read_by: string[]; // List of user IDs who dismissed it
+  seen_by?: { userId: string, seenAt: string }[]; // Track when each user first saw it
 }
 
 // --- Components ---
@@ -555,6 +556,7 @@ export default function App() {
   const [adminRides, setAdminRides] = useState<Ride[]>([]);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [activeNotification, setActiveNotification] = useState<Notification | null>(null);
+  const [sessionDismissed, setSessionDismissed] = useState<string[]>([]);
   const [newNotification, setNewNotification] = useState({
     message: '',
     target: 'all_drivers' as Notification['target'],
@@ -708,6 +710,50 @@ export default function App() {
     };
   }, []);
 
+  // Find and set active notification
+  useEffect(() => {
+    if (!user || !notifications.length) return;
+    
+    const latest = notifications.find(n => {
+      // If dismissed in this session, don't show again until reload
+      if (sessionDismissed.includes(n.id)) return false;
+
+      const seenInfo = n.seen_by?.find(s => s.userId === user.id);
+      
+      // If seen, check if it's within 24 hours
+      if (seenInfo) {
+        const seenAt = new Date(seenInfo.seenAt).getTime();
+        const now = new Date().getTime();
+        const twentyFourHours = 24 * 60 * 60 * 1000;
+        
+        // If more than 24 hours have passed since it was seen, hide it
+        if (now - seenAt > twentyFourHours) return false;
+        
+        // If within 24 hours, it should still show on app open
+        return true;
+      }
+
+      // If not seen yet, show it
+      const isRead = n.read_by?.includes(user.id);
+      if (isRead) return false;
+
+      // Extra client-side check for specific driver
+      if (n.target === 'specific_driver' && n.driver_id !== user.id) return false;
+      
+      // Extra client-side check for specific user
+      if (n.target === 'specific_user' && n.user_id !== user.id) return false;
+
+      // Extra client-side check for specific admin
+      if (n.target === 'specific_admin' && n.admin_id !== user.id) return false;
+      
+      return true;
+    });
+
+    if (latest && (!activeNotification || activeNotification.id !== latest.id)) {
+      setActiveNotification(latest);
+    }
+  }, [notifications, sessionDismissed, user]);
+
   const stopRing = () => {
     if (audioRef.current) {
       audioRef.current.pause();
@@ -822,27 +868,6 @@ export default function App() {
       setNotifications(notifs);
       if (view === 'admin') {
         setAdminNotifications(notifs);
-      }
-      
-      // Find latest unread notification for current user
-      const latest = notifs.find(n => {
-        const isRead = n.read_by?.includes(user.id);
-        if (isRead) return false;
-
-        // Extra client-side check for specific driver
-        if (n.target === 'specific_driver' && n.driver_id !== user.id) return false;
-        
-        // Extra client-side check for specific user
-        if (n.target === 'specific_user' && n.user_id !== user.id) return false;
-
-        // Extra client-side check for specific admin
-        if (n.target === 'specific_admin' && n.admin_id !== user.id) return false;
-        
-        return true;
-      });
-
-      if (latest) {
-        setActiveNotification(latest);
       }
     }, (err) => {
       // If query fails (e.g. specific_driver query needs index or permission issue)
@@ -1132,7 +1157,8 @@ export default function App() {
           message: `Ride ${rideData?.tracking_id} cancelled by user. Reason: ${cancellationReason}`,
           target: 'admin_alert',
           created_at: new Date().toISOString(),
-          read_by: []
+          read_by: [],
+          seen_by: []
         });
 
         setToast({ message: "Ride Cancelled", type: 'success' });
@@ -1429,7 +1455,8 @@ export default function App() {
       await addDoc(collection(db, 'notifications'), {
         ...newNotification,
         created_at: new Date().toISOString(),
-        read_by: []
+        read_by: [],
+        seen_by: []
       });
       
       // Log activity
@@ -1447,10 +1474,26 @@ export default function App() {
   const dismissNotification = async (notificationId: string) => {
     if (!user) return;
     try {
+      // Add to session dismissed list so it doesn't pop up again until reload
+      setSessionDismissed(prev => [...prev, notificationId]);
+      
       const notifRef = doc(db, 'notifications', notificationId);
-      await updateDoc(notifRef, {
-        read_by: arrayUnion(user.id)
-      });
+      const notif = notifications.find(n => n.id === notificationId);
+      
+      if (notif) {
+        const alreadySeen = notif.seen_by?.some(s => s.userId === user.id);
+        
+        if (!alreadySeen) {
+          // Record first seen time
+          await updateDoc(notifRef, {
+            seen_by: arrayUnion({
+              userId: user.id,
+              seenAt: new Date().toISOString()
+            })
+          });
+        }
+      }
+
       setActiveNotification(null);
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `notifications/${notificationId}`);
@@ -1572,7 +1615,8 @@ export default function App() {
           target: 'specific_admin',
           admin_id: forwardToAdminId,
           created_at: new Date().toISOString(),
-          read: false
+          read_by: [],
+          seen_by: []
         });
       }
 
@@ -1583,7 +1627,8 @@ export default function App() {
           target: 'specific_driver',
           driver_id: complaintReplyModal.driverId,
           created_at: new Date().toISOString(),
-          read: false
+          read_by: [],
+          seen_by: []
         });
       }
 
@@ -1597,7 +1642,8 @@ export default function App() {
             target: 'specific_user',
             user_id: rideData.user_id,
             created_at: new Date().toISOString(),
-            read: false
+            read_by: [],
+            seen_by: []
           });
         }
       }
@@ -3756,7 +3802,7 @@ export default function App() {
                                     <p className="text-[8px] uppercase font-black tracking-widest text-zinc-400">Database Storage (Docs)</p>
                                   </div>
                                   <p className="text-[8px] font-black text-emerald-400 bg-emerald-400/10 px-1.5 py-0.5 rounded-md">
-                                    {(adminRides.length + adminUsers.length + adminDrivers.length)} / 20,000,000 Documents
+                                    {(adminRides.length + adminUsers.length + adminDrivers.length)} / 20,000,000 Docs (~40GB)
                                   </p>
                                 </div>
                                 <div className="w-full bg-white/5 h-1.5 rounded-full overflow-hidden border border-white/10">

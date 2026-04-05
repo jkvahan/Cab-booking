@@ -69,6 +69,55 @@ if (db) {
       console.log("Testing Firestore connection...");
       await db.collection('push_subscriptions').limit(1).get();
       console.log("Firestore connection successful.");
+      
+      // Background Cleanup Task for Notifications
+      // Deletes notifications 24 hours after they were seen by the recipient
+      setInterval(async () => {
+        try {
+          console.log("Running notification cleanup task...");
+          const now = new Date();
+          const twentyFourHoursAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+          
+          const snapshot = await db.collection('notifications').get();
+          const deletePromises: Promise<any>[] = [];
+          
+          snapshot.docs.forEach((doc: any) => {
+            const data = doc.data();
+            const target = data.target;
+            const seenBy = data.seen_by || [];
+            
+            if (target === 'specific_driver' || target === 'specific_user' || target === 'specific_admin') {
+              // For specific targets, delete if seen > 24h ago
+              const recipientId = data.driver_id || data.user_id || data.admin_id;
+              const seenInfo = seenBy.find((s: any) => s.userId === recipientId);
+              
+              if (seenInfo) {
+                const seenAt = new Date(seenInfo.seenAt);
+                if (seenAt < twentyFourHoursAgo) {
+                  deletePromises.push(doc.ref.delete());
+                }
+              }
+            } else if (target === 'all_drivers' || target === 'all_users') {
+              // For broadcast targets, delete if created > 48h ago (to give everyone time to see)
+              // OR if it's > 24h old and has been seen by at least one person
+              const createdAt = new Date(data.created_at);
+              if (createdAt < twentyFourHoursAgo && seenBy.length > 0) {
+                deletePromises.push(doc.ref.delete());
+              } else if (createdAt < new Date(now.getTime() - 48 * 60 * 60 * 1000)) {
+                // Hard delete after 48h regardless of seen status
+                deletePromises.push(doc.ref.delete());
+              }
+            }
+          });
+          
+          if (deletePromises.length > 0) {
+            await Promise.all(deletePromises);
+            console.log(`Cleaned up ${deletePromises.length} expired notifications.`);
+          }
+        } catch (error) {
+          console.error("Notification cleanup error:", error);
+        }
+      }, 15 * 60 * 1000); // Run every 15 minutes
     } catch (error) {
       console.error("Firestore startup connection test failed:", error);
     }
