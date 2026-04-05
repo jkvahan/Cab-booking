@@ -5436,7 +5436,7 @@ export default function App() {
                       
                       <div className="relative z-10 flex items-center justify-between gap-4">
                         <div className="shrink-0">
-                          <p className="text-zinc-400 font-black uppercase tracking-widest text-[7px] mb-0.5">Total Earnings</p>
+                          <p className="text-zinc-400 font-black uppercase tracking-widest text-[7px] mb-0.5">Available Amount</p>
                           <h2 className="text-lg font-black">₹{driverWallet.balance}</h2>
                         </div>
                         
