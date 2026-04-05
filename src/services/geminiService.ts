@@ -73,9 +73,11 @@ export async function estimateFare(pickup: string, dropoff: string) {
     return { 
       distance: 12, 
       options: [
-        { type: "Mini", fare: 180 },
-        { type: "Sedan", fare: 280 },
-        { type: "SUV", fare: 450 }
+        { type: "Mini (AC)", fare: 180 },
+        { type: "Sedan (AC)", fare: 280 },
+        { type: "SUV (AC)", fare: 450 },
+        { type: "Ertiga (9 Seater)", fare: 550 },
+        { type: "Tempo (AC)", fare: 750 }
       ] 
     }; // Robust Fallback
   }

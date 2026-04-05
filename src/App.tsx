@@ -258,6 +258,7 @@ interface Ride {
   advance_paid?: number;
   payment_id?: string;
   cancellation_reason?: string;
+  passengers?: number;
 }
 
 interface AdminUser {
@@ -653,7 +654,9 @@ export default function App() {
     driver_id: '',
     status: 'pending' as Ride['status'],
     trip_type: 'single' as Ride['trip_type'],
-    distance: ''
+    distance: '',
+    vehicle_type: 'Sedan (AC)',
+    passengers: '1'
   });
 
   const [activities, setActivities] = useState<any[]>([]);
@@ -1710,8 +1713,12 @@ export default function App() {
         driver_id: manualRideData.driver_id || null,
         driver_name: driver ? driver.name : null,
         driver_phone: driver ? driver.phone : null,
+        plate_number: driver ? driver.vehicle_number : null,
+        vehicle_model: driver ? driver.vehicle_model || driver.vehicle_type : null,
         trip_type: manualRideData.trip_type,
         distance: manualRideData.distance ? parseFloat(manualRideData.distance) : null,
+        vehicle_type: manualRideData.vehicle_type,
+        passengers: parseInt(manualRideData.passengers),
         created_at: new Date().toISOString(),
         accepted_at: manualRideData.status !== 'pending' ? new Date().toISOString() : null,
         started_at: manualRideData.status === 'ongoing' || manualRideData.status === 'completed' ? new Date().toISOString() : null,
@@ -1740,7 +1747,9 @@ export default function App() {
         driver_id: '',
         status: 'pending',
         trip_type: 'single',
-        distance: ''
+        distance: '',
+        vehicle_type: 'Sedan (AC)',
+        passengers: '1'
       });
     } catch (err) {
       handleFirestoreError(err, OperationType.CREATE, 'rides');
@@ -4593,6 +4602,11 @@ export default function App() {
                                       {ride.vehicle_type}
                                     </span>
                                   )}
+                                  {ride.passengers && (
+                                    <span className="text-[8px] bg-zinc-100 text-zinc-600 px-1 py-0.5 rounded font-bold uppercase flex items-center gap-0.5">
+                                      <Users className="w-2 h-2" /> {ride.passengers}
+                                    </span>
+                                  )}
                                 </div>
                               </td>
                               <td className="px-6 py-4 font-medium">{(ride as any).distance || '---'}</td>
@@ -5165,7 +5179,7 @@ export default function App() {
                                 value={editingDriver.vehicle_seats || '4'}
                                 onChange={e => setEditingDriver({ ...editingDriver, vehicle_seats: e.target.value })}
                               >
-                                {[1, 3, 4, 6, 7, 10, 12, 16].map(num => (
+                                {[1, 3, 4, 6, 7, 9, 10, 12, 16].map(num => (
                                   <option key={num} value={num.toString()}>{num} Seater</option>
                                 ))}
                               </select>
@@ -5274,7 +5288,7 @@ export default function App() {
                                 value={loginData.vehicle_seats}
                                 onChange={e => setLoginData({ ...loginData, vehicle_seats: e.target.value })}
                               >
-                                {[1, 3, 4, 6, 7, 10, 12, 16].map(num => (
+                                {[1, 3, 4, 6, 7, 9, 10, 12, 16].map(num => (
                                   <option key={num} value={num.toString()}>{num} Seater</option>
                                 ))}
                               </select>
@@ -5564,6 +5578,12 @@ export default function App() {
                       <div className="grid grid-cols-1 gap-4">
                         {availableRides
                           .filter(ride => {
+                            // Show pending rides to everyone, but others only to the assigned driver
+                            if (ride.status === 'pending') return true;
+                            if (ride.driver_id === user.id) return true;
+                            return false;
+                          })
+                          .filter(ride => {
                             if (driverRidesTab === 'all') return true;
                             if (driverRidesTab === 'available') return ride.status === 'pending';
                             if (driverRidesTab === 'accepted') return ride.status === 'accepted' || ride.status === 'ongoing';
@@ -5594,9 +5614,9 @@ export default function App() {
                                     <p className="text-[10px] font-black text-indigo-600 uppercase bg-indigo-50 px-1.5 py-0.5 rounded">
                                       {ride.vehicle_type}
                                     </p>
-                                    {(ride as any).passengers && (
+                                    {ride.passengers && (
                                       <p className="text-[10px] font-bold text-zinc-500 flex items-center gap-1">
-                                        <Users className="w-2.5 h-2.5" /> {(ride as any).passengers} Pax
+                                        <Users className="w-2.5 h-2.5" /> {ride.passengers} Pax
                                       </p>
                                     )}
                                   </div>
@@ -6234,6 +6254,32 @@ export default function App() {
                       <option value="ongoing">Ongoing</option>
                       <option value="completed">Completed</option>
                       <option value="cancelled">Cancelled</option>
+                    </select>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-zinc-400 ml-1">Vehicle Type</label>
+                    <select 
+                      className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-xl text-sm focus:ring-2 focus:ring-zinc-900 outline-none"
+                      value={manualRideData.vehicle_type}
+                      onChange={e => setManualRideData({...manualRideData, vehicle_type: e.target.value})}
+                    >
+                      {Object.keys(VEHICLE_RATES).map(type => (
+                        <option key={type} value={type}>{type}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-zinc-400 ml-1">Passengers</label>
+                    <select 
+                      className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-xl text-sm focus:ring-2 focus:ring-zinc-900 outline-none"
+                      value={manualRideData.passengers}
+                      onChange={e => setManualRideData({...manualRideData, passengers: e.target.value})}
+                    >
+                      {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(num => (
+                        <option key={num} value={num.toString()}>{num} Passenger{num > 1 ? 's' : ''}</option>
+                      ))}
                     </select>
                   </div>
                 </div>

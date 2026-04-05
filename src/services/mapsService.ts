@@ -10,9 +10,16 @@ export const VEHICLE_RATES = {
   "Sedan (AC)": { base: 55, perKm: 16, description: "Premium AC sedan experience", seats: 4 },
   "SUV (Non-AC)": { base: 60, perKm: 18, description: "Large non-AC vehicle for groups", seats: 6 },
   "SUV (AC)": { base: 75, perKm: 22, description: "Spacious AC SUV for families", seats: 6 },
+  "Eeco (7 Seater)": { base: 65, perKm: 16, description: "Economical 7-seater for small groups", seats: 7 },
+  "Ertiga (9 Seater)": { base: 85, perKm: 24, description: "Spacious 9-seater family car", seats: 9 },
+  "Bolero (7 Seater)": { base: 75, perKm: 20, description: "Rugged 7-seater for all terrains", seats: 7 },
+  "Scorpio (7 Seater)": { base: 90, perKm: 25, description: "Premium 7-seater SUV", seats: 7 },
+  "Sumo (10 Seater)": { base: 100, perKm: 28, description: "Large 10-seater for big groups", seats: 10 },
+  "Tavera (10 Seater)": { base: 110, perKm: 30, description: "Comfortable 10-seater for long trips", seats: 10 },
   "Luxury (AC)": { base: 150, perKm: 40, description: "High-end luxury AC cars", seats: 4 },
   "Tempo (Non-AC)": { base: 100, perKm: 25, description: "12-seater for large groups", seats: 12 },
-  "Tempo (AC)": { base: 150, perKm: 35, description: "Comfortable 12-seater AC tempo", seats: 12 }
+  "Tempo (AC)": { base: 150, perKm: 35, description: "Comfortable 12-seater AC tempo", seats: 12 },
+  "Others": { base: 50, perKm: 15, description: "Other vehicle types", seats: 4 }
 };
 
 export interface FareOption {

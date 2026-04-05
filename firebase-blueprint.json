@@ -62,7 +62,7 @@
         "driver_id": { "type": "string" },
         "model": { "type": "string" },
         "plate_number": { "type": "string" },
-        "type": { "type": "string", "enum": ["Mini", "Sedan", "SUV", "Traveller"] }
+        "type": { "type": "string", "enum": ["Bike", "Auto", "E-Rickshaw", "Mini (Non-AC)", "Mini (AC)", "Sedan (Non-AC)", "Sedan (AC)", "SUV (Non-AC)", "SUV (AC)", "Eeco (7 Seater)", "Ertiga (9 Seater)", "Bolero (7 Seater)", "Scorpio (7 Seater)", "Sumo (10 Seater)", "Tavera (10 Seater)", "Luxury (AC)", "Tempo (Non-AC)", "Tempo (AC)", "Others"] }
       },
       "required": ["driver_id", "model", "plate_number", "type"]
     },
@@ -82,6 +82,7 @@
         "fare": { "type": "number" },
         "discount": { "type": "number", "description": "Discount amount applied to the ride" },
         "vehicle_type": { "type": "string" },
+        "passengers": { "type": "integer", "description": "Number of passengers for the ride" },
         "driver_id": { "type": "string" },
         "user_id": { "type": "string" },
         "user_name": { "type": "string" },
